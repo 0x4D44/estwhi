@@ -1,0 +1,23 @@
+; This help project requires hc 3.1
+[OPTIONS]
+errorlog = estwhi.err
+title = Estimation Whist Help
+contents = main_contents
+copyright = Copyright MGD 1994
+compress = 1
+oldkeyphrase = false
+warning = 3
+
+[FILES]
+estwhi.rtf
+
+[MAP]
+options 100
+random 101
+
+[WINDOWS]
+main = "Estimation Whist Help",,,, (192,192,192 )
+
+[CONFIG]
+BrowseButtons()
+
