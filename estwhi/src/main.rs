@@ -18,6 +18,7 @@ use windows::Win32::Graphics::Gdi::Rectangle as GdiRectangle;
 use windows::Win32::Foundation::COLORREF;
 
 use windows::Win32::UI::WindowsAndMessaging::*;
+use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 
 use windows::Win32::Graphics::Gdi::FrameRect;
 
@@ -2177,7 +2178,7 @@ unsafe fn show_call_dialog(parent: HWND) -> i32 {
         LPARAM(0),
     );
 
-    ret as i32 // returns selection (0..15) or -1 on cancel
+    ret as i32 // returns selection (0..15)
 }
 
 // Run bidding phase for all players with last-bidder constraint and simple AI
@@ -2646,17 +2647,23 @@ extern "system" fn call_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: 
 
                 drop(app);
 
+                for v in 0..=15 {
+                    let child = GetDlgItem(hwnd, (IDC_CALL_BASE + v as u16) as i32).unwrap();
+
+                    let _ = EnableWindow(child, BOOL(1));
+                }
+
                 for v in (maxc + 1)..=15 {
                     let child = GetDlgItem(hwnd, (IDC_CALL_BASE + v as u16) as i32).unwrap();
 
-                    let _ = SendMessageW(child, WM_ENABLE, WPARAM(0), LPARAM(0));
+                    let _ = EnableWindow(child, BOOL(0));
                 }
 
                 if let Some(fv) = forbid {
                     if fv <= 15 {
                         let child = GetDlgItem(hwnd, (IDC_CALL_BASE + fv as u16) as i32).unwrap();
 
-                        let _ = SendMessageW(child, WM_ENABLE, WPARAM(0), LPARAM(0));
+                        let _ = EnableWindow(child, BOOL(0));
                     }
                 }
 
@@ -2671,11 +2678,6 @@ extern "system" fn call_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: 
 
                     let _ = EndDialog(hwnd, sel);
 
-                    return 1;
-                }
-
-                if id == 2 {
-                    let _ = EndDialog(hwnd, -1);
                     return 1;
                 }
             }
@@ -2842,3 +2844,4 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
         None
     }
 }
+
