@@ -1,0 +1,8 @@
+[package]
+name = "card-normalizer"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+image = { version = "0.24", default-features = false, features = ["bmp", "png", "jpeg", "ico"] }
+walkdir = "2"

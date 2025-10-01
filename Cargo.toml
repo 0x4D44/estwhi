@@ -1,0 +1,7 @@
+[workspace]
+members = [
+  "estwhi-core",
+  "estwhi",
+  "tools/extract-res"
+, "tools/card-normalizer", "tools/test-res-load"]
+resolver = "2"

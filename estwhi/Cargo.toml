@@ -1,0 +1,31 @@
+[package]
+name = "estwhi"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+estwhi-core = { path = "../estwhi-core" }
+windows = { version = "0.58", features = [
+    "Win32_Foundation",
+    "Win32_UI_WindowsAndMessaging",
+    "Win32_Graphics_Gdi",
+    "Win32_UI_Controls",
+    "Win32_UI_HiDpi",
+    "Win32_System_SystemServices",
+    "Win32_Storage_FileSystem",
+    "Win32_System_Registry",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Diagnostics_Debug",
+] }
+rand = "0.8"
+
+[build-dependencies]
+embed-resource = "2"
+
+[package.metadata.winres]
+FileDescription = "Estimation Whist"
+ProductName = "Estimation Whist"
+OriginalFilename = "estwhi.exe"
+
+[features]
+no-res = []

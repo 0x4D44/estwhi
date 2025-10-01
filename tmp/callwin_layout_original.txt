@@ -1,0 +1,22 @@
+Original Call dialog buttons (from ESTWHI.RES)
+ID Caption X Y Width Height
+400   0    6  6 12 12
+401   1   23  6 12 12
+402   2   40  6 12 12
+403   3   57  6 12 12
+404   4    6 22 12 12
+405   5   23 22 12 12
+406   6   40 22 12 12
+407   7   57 22 12 12
+408   8    6 38 12 12
+409   9   23 38 12 12
+410  10   40 38 12 12
+411  11   57 38 12 12
+412  12    6 54 12 12
+413  13   23 54 12 12
+414  14   40 54 12 12
+415  15   57 54 12 12
+
+Caption text = "Your call :-"
+Font = 8pt MS Sans Serif
+Layout grid = 4 columns × 4 rows, 16px spacing
