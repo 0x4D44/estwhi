@@ -151,9 +151,7 @@ pub fn score_hand(
         // the table under-called the hand (sum(calls) < dealt_cards). Since zero
         // bids never get a bonus here, the hard-score condition is redundant but
         // we keep the structure for clarity in case of future rule tweaks.
-        let available_bonus = if call == 0 {
-            0
-        } else if hard_score && total_calls < dealt_cards {
+        let available_bonus = if call == 0 || (hard_score && total_calls < dealt_cards) {
             0
         } else {
             10

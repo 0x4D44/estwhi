@@ -309,7 +309,7 @@ fn main() -> io::Result<()> {
                         let mut hdr = vec![0u8; 40];
                         hdr[0..4].copy_from_slice(&40u32.to_le_bytes());
                         hdr[4..8].copy_from_slice(&(w as i32).to_le_bytes());
-                        hdr[8..12].copy_from_slice(&(info.height as i32).to_le_bytes());
+                        hdr[8..12].copy_from_slice(&info.height.to_le_bytes());
                         hdr[12..14].copy_from_slice(&1u16.to_le_bytes());
                         hdr[14..16].copy_from_slice(&(info._bpp).to_le_bytes());
                         hdr[16..20].copy_from_slice(&0u32.to_le_bytes());
@@ -340,9 +340,10 @@ fn main() -> io::Result<()> {
                     format!("{}_id_{:03}.bmp", name, id)
                 } else {
                     format!(
-                        "{}_{}_{:03}.bmp",
+                        "{}_{}x{}_{:03}.bmp",
                         name,
-                        format!("{}x{}", info.width, info.height.abs()),
+                        info.width,
+                        info.height.abs(),
                         *cat_ref
                     )
                 };

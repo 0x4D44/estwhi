@@ -1,4 +1,7 @@
 #![windows_subsystem = "windows"]
+#![allow(clippy::let_unit_value)]
+#![allow(clippy::cmp_null)]
+#![allow(dead_code)]
 
 use windows::core::PCWSTR;
 
@@ -17,8 +20,8 @@ use windows::Win32::Graphics::Gdi::Rectangle as GdiRectangle;
 
 use windows::Win32::Foundation::COLORREF;
 
-use windows::Win32::UI::WindowsAndMessaging::*;
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 use windows::Win32::Graphics::Gdi::FrameRect;
 
@@ -61,13 +64,11 @@ use std::cell::RefCell;
 mod registry;
 
 #[inline]
-
 const fn make_int_resource(id: u16) -> PCWSTR {
     PCWSTR(id as usize as *const u16)
 }
 
 #[inline]
-
 const fn loword(val: u32) -> u16 {
     (val & 0xffff) as u16
 }
@@ -237,7 +238,7 @@ thread_local! {
 
 
 
-    static UI_HANDLES: RefCell<UiHandles> = RefCell::new(UiHandles { status_hwnd: HWND(0 as _), status_font: windows::Win32::Graphics::Gdi::HFONT(0 as _), hbr_green: HBRUSH(0 as _), hbr_gray: HBRUSH(0 as _), deal_btn: HWND(0 as _), exit_btn: HWND(0 as _) });
+    static UI_HANDLES: RefCell<UiHandles> = const { RefCell::new(UiHandles { status_hwnd: HWND(0 as _), status_font: windows::Win32::Graphics::Gdi::HFONT(0 as _), hbr_green: HBRUSH(0 as _), hbr_gray: HBRUSH(0 as _), deal_btn: HWND(0 as _), exit_btn: HWND(0 as _) }) };
 
 
 
@@ -342,7 +343,7 @@ fn set_status(text: &str) {
     UI_HANDLES.with(|h| unsafe {
         let hh = h.borrow();
 
-        if hh.status_hwnd.0 != core::ptr::null_mut() {
+        if !hh.status_hwnd.0.is_null() {
             let _ = SetWindowTextW(hh.status_hwnd, PCWSTR(w.as_ptr()));
         }
     });
@@ -360,7 +361,7 @@ fn debug_out(s: &str) {
     let w = wide(&msg);
 
     unsafe {
-        let _ = OutputDebugStringW(PCWSTR(w.as_ptr()));
+        OutputDebugStringW(PCWSTR(w.as_ptr()));
     }
 }
 
@@ -778,7 +779,7 @@ fn main() -> windows::core::Result<()> {
 
         while GetMessageW(&mut msg, None, 0, 0).into() {
             if let Some(acc) = haccel {
-                if TranslateAcceleratorW(hwnd, acc, &mut msg) != 0 {
+                if TranslateAcceleratorW(hwnd, acc, &msg) != 0 {
                     continue;
                 }
             }
@@ -861,7 +862,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 };
 
                 let info_w = (240.0 * scale).round() as i32;
-                let info_bottom = (hand_rc.top - (8.0 * scale).round() as i32).max(0);
+                let info_bottom = hand_rc.top;
                 let info_left = (rc.right - info_w).max(0);
                 let info_rc = RECT {
                     left: info_left,
@@ -1011,7 +1012,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 }
 
 #[allow(dead_code)]
-
 unsafe fn draw_status(hdc: HDC, rc: &RECT, text: &str) {
     SetBkMode(hdc, TRANSPARENT);
 
@@ -1192,8 +1192,8 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
             app.game.dealt_cards,
         );
 
-        for i in 0..n {
-            app.game.scores[i] = app.game.scores[i].saturating_add(deltas[i]);
+        for (i, &delta) in deltas.iter().enumerate().take(n) {
+            app.game.scores[i] = app.game.scores[i].saturating_add(delta);
         }
 
         let max = app.config.max_cards;
@@ -1203,7 +1203,7 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
 
         let best_score = *app.game.scores.iter().max().unwrap_or(&0);
 
-        let human_best = app.game.scores.get(0).copied().unwrap_or(0);
+        let human_best = app.game.scores.first().copied().unwrap_or(0);
 
         dbglog!(
             "End hand (finalize): round={} final_round={} scores={:?}",
@@ -1661,7 +1661,7 @@ unsafe fn draw_trick(hdc: HDC, rc: &RECT, scale: f32) {
 unsafe fn draw_bevel_box(hdc: HDC, rc: RECT) {
     let black = CreateSolidBrush(COLORREF(0x000000));
 
-    let ltgray = CreateSolidBrush(COLORREF((192 << 16) | (192 << 8) | 192));
+    let ltgray = CreateSolidBrush(COLORREF(0x00F0F0F0)); // Match button-face grey
 
     let dark = CreateSolidBrush(COLORREF(0x00A0A0A0));
 
@@ -2126,7 +2126,6 @@ const IDD_SCORES: u16 = 3003;
 const IDD_CALL: u16 = 3004;
 
 #[allow(dead_code)]
-
 const IDC_LIST_SCORES: u16 = 4010;
 
 const IDC_CALL_BASE: u16 = 4100; // 0..15
@@ -2378,8 +2377,7 @@ extern "system" fn options_dlg_proc(
                     PCWSTR(wide("").as_ptr()),
                     WINDOW_STYLE(
                         (WS_CHILD | WS_VISIBLE).0
-                            | ((UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS)
-                                as u32),
+                            | (UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS),
                     ),
                     0,
                     0,
@@ -2406,8 +2404,7 @@ extern "system" fn options_dlg_proc(
                     PCWSTR(wide("").as_ptr()),
                     WINDOW_STYLE(
                         (WS_CHILD | WS_VISIBLE).0
-                            | ((UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS)
-                                as u32),
+                            | (UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS),
                     ),
                     0,
                     0,
@@ -2844,4 +2841,3 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
         None
     }
 }
-
