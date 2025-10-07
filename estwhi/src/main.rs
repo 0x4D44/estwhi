@@ -1164,39 +1164,34 @@ unsafe fn draw_extra_info(hdc: HDC, rc: &RECT, _scale: f32) {
 
     let app = app_state().lock().unwrap();
 
-    let mut y = rc.top + 8;
+    let mut y = rc.top + 10;
     let x = rc.left + 10;
     let line_height = 15;
 
-    // Cards in hand
-    let cards_text = wide(&format!("Cards in hand: {}", app.game.hand.len()));
-    let _ = TextOutW(hdc, x, y, &cards_text[..cards_text.len() - 1]);
+    // Calculate total rounds (matching Pascal: NumberofRounds = (NoMaxCards * 2) - 1)
+    let total_rounds = (app.config.max_cards * 2).saturating_sub(1);
+
+    // Round number: X of Y
+    let round_text = wide(&format!(
+        "Round number: {} of {}",
+        app.game.round_no, total_rounds
+    ));
+    let _ = TextOutW(hdc, x, y, &round_text[..round_text.len() - 1]);
     y += line_height;
 
-    // Trump suit
-    let trump_name = match app.game.trump {
-        1 => "Clubs",
-        2 => "Diamonds",
-        3 => "Spades",
-        4 => "Hearts",
-        _ => "None",
-    };
-    let trump_text = wide(&format!("Trump: {}", trump_name));
-    let _ = TextOutW(hdc, x, y, &trump_text[..trump_text.len() - 1]);
+    // Player to start: X
+    let start_text = wide(&format!("Player to start: {}", app.game.start_player));
+    let _ = TextOutW(hdc, x, y, &start_text[..start_text.len() - 1]);
     y += line_height;
 
-    // Current status
-    let status = if app.game.waiting_for_continue {
-        "Click to continue"
-    } else if app.game.waiting_for_human {
-        "Your turn"
-    } else if app.game.in_progress {
-        "Opponent playing"
+    // Last trick won by: X
+    let winner_str = if let Some(w) = app.game.last_winner {
+        format!("{}", w)
     } else {
-        "Ready to deal"
+        "      ".to_string()
     };
-    let status_text = wide(&format!("Status: {}", status));
-    let _ = TextOutW(hdc, x, y, &status_text[..status_text.len() - 1]);
+    let winner_text = wide(&format!("Last trick won by: {}", winner_str));
+    let _ = TextOutW(hdc, x, y, &winner_text[..winner_text.len() - 1]);
 
     SetBkMode(hdc, TRANSPARENT);
 }
