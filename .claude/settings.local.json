@@ -2,7 +2,12 @@
   "permissions": {
     "allow": [
       "Bash(cargo:*)",
-      "Bash(mkdir:*)"
+      "Bash(mkdir:*)",
+      "Bash(find:*)",
+      "WebSearch",
+      "WebFetch(domain:devblogs.microsoft.com)",
+      "Bash(pip install:*)",
+      "Bash(python:*)"
     ],
     "deny": [],
     "ask": []
