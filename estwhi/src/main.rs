@@ -929,6 +929,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     bottom: (225.0 * scale).round() as i32,
                 };
                 draw_bevel_box(memdc, other_rc);
+                draw_extra_info(memdc, &other_rc, scale);
 
                 if classic {
                     draw_trick_classic(memdc);
@@ -1152,6 +1153,50 @@ unsafe fn draw_info_panel(hdc: HDC, _rc: &RECT, _scale: f32) {
             blit_bitmap(hdc, HBITMAP(obj.0), 285, 80, 31, 31);
         }
     }
+
+    SetBkMode(hdc, TRANSPARENT);
+}
+
+unsafe fn draw_extra_info(hdc: HDC, rc: &RECT, _scale: f32) {
+    SetBkMode(hdc, windows::Win32::Graphics::Gdi::OPAQUE);
+    SetTextColor(hdc, COLORREF(0x000000));
+    windows::Win32::Graphics::Gdi::SetBkColor(hdc, COLORREF(0x00F0F0F0));
+
+    let app = app_state().lock().unwrap();
+
+    let mut y = rc.top + 8;
+    let x = rc.left + 10;
+    let line_height = 15;
+
+    // Cards in hand
+    let cards_text = wide(&format!("Cards in hand: {}", app.game.hand.len()));
+    let _ = TextOutW(hdc, x, y, &cards_text[..cards_text.len() - 1]);
+    y += line_height;
+
+    // Trump suit
+    let trump_name = match app.game.trump {
+        1 => "Clubs",
+        2 => "Diamonds",
+        3 => "Spades",
+        4 => "Hearts",
+        _ => "None",
+    };
+    let trump_text = wide(&format!("Trump: {}", trump_name));
+    let _ = TextOutW(hdc, x, y, &trump_text[..trump_text.len() - 1]);
+    y += line_height;
+
+    // Current status
+    let status = if app.game.waiting_for_continue {
+        "Click to continue"
+    } else if app.game.waiting_for_human {
+        "Your turn"
+    } else if app.game.in_progress {
+        "Opponent playing"
+    } else {
+        "Ready to deal"
+    };
+    let status_text = wide(&format!("Status: {}", status));
+    let _ = TextOutW(hdc, x, y, &status_text[..status_text.len() - 1]);
 
     SetBkMode(hdc, TRANSPARENT);
 }
@@ -2128,7 +2173,7 @@ const IDD_CALL: u16 = 3004;
 #[allow(dead_code)]
 const IDC_LIST_SCORES: u16 = 4010;
 
-const IDC_CALL_BASE: u16 = 4100; // 0..15
+const IDC_CALL_BASE: u16 = 400; // 0..15 (ID_CALLZER through ID_CALLFIF in original)
 
 unsafe fn show_about_dialog(parent: HWND) {
     let hinst = GetModuleHandleW(None).unwrap();
