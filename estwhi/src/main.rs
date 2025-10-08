@@ -997,15 +997,16 @@ fn main() -> windows::core::Result<()> {
 
             let scale = dpi as f32 / 96.0;
             let status_h = (STATUS_HEIGHT * scale).round() as i32;
+            let status_padding = (6.0 * scale).round() as i32; // Left padding for status text
 
             let shwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 PCWSTR(wide("STATIC").as_ptr()),
                 PCWSTR(wide("Ready").as_ptr()),
-                WS_CHILD | WS_VISIBLE,
-                0,
+                WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x200), // SS_CENTERIMAGE for vertical centering
+                status_padding,
                 rc.bottom - status_h,
-                rc.right - rc.left,
+                rc.right - rc.left - status_padding,
                 status_h,
                 hwnd,
                 None,
