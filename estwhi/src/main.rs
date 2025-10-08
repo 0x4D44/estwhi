@@ -113,6 +113,21 @@ const EXIT_BTN_Y: f32 = 285.0;
 const BUTTON_SIZE: f32 = 45.0;
 const STATUS_HEIGHT: f32 = 24.0;
 
+// Random Things constants
+const ID_RNDTIMER: usize = 2000;
+const ID_ICNTIMER: usize = 2001;
+const THING_SIZE: i32 = 31;
+
+// Random Things dialog control IDs
+const IDC_RNDMULTSC: i32 = 660;
+const IDC_RNDNUMBSC: i32 = 661;
+const IDC_RNDTIMESC: i32 = 662;
+const IDC_RNDMULTST: i32 = 663;
+const IDC_RNDNUMBST: i32 = 664;
+const IDC_RNDTIMEST: i32 = 665;
+const IDC_RNDEXISCK: i32 = 666;
+const IDC_RNDICONCK: i32 = 667;
+
 // Legacy classic layout rectangles (mirrors DrawControls/DrawPlayedCards in estwhi.pas)
 // Score panel: (340,20)-(585, 60 + 15 * players)
 // Played cards caption: (20,20)-(130,47); Your hand caption: (20,198)-(130,225)
@@ -210,12 +225,84 @@ struct GameState {
     waiting_for_continue: bool,
 }
 
+#[derive(Clone, Debug)]
+struct RandomThingsConfig {
+    enabled: bool,
+    icon_twirl_enabled: bool,
+    multiplier: i32,
+    count: usize,
+    interval_ms: u32,
+}
+
+impl Default for RandomThingsConfig {
+    fn default() -> Self {
+        Self {
+            enabled: true,
+            icon_twirl_enabled: true,
+            multiplier: 6,
+            count: 4,
+            interval_ms: 200,
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+struct RandomThingState {
+    x: i32,
+    y: i32,
+    bitmap_index: usize,
+}
+
+#[derive(Default)]
+struct RandomThings {
+    config: RandomThingsConfig,
+    things: Vec<RandomThingState>,
+    random_timer_active: bool,
+    icon_timer_active: bool,
+    icon_count: usize,
+}
+
+impl RandomThings {
+    fn validate_and_fix_config(&mut self) {
+        self.config.multiplier = self.config.multiplier.clamp(1, 20);
+        self.config.count = self.config.count.clamp(1, 4);
+        self.config.interval_ms = self.config.interval_ms.clamp(20, 1000);
+    }
+
+    fn resize_things(&mut self, client_width: i32, client_height: i32) {
+        let current_count = self.things.len();
+        let new_count = self.config.count;
+
+        match new_count.cmp(&current_count) {
+            std::cmp::Ordering::Greater => {
+                for i in current_count..new_count {
+                    // Initialize in the table area (left side), not center of whole window
+                    // The table is roughly 2/3 of width and most of height
+                    let safe_x = (client_width / 3).max(100);
+                    let safe_y = (client_height / 3).max(100);
+                    self.things.push(RandomThingState {
+                        x: safe_x,
+                        y: safe_y,
+                        bitmap_index: i % 4,
+                    });
+                }
+            }
+            std::cmp::Ordering::Less => {
+                self.things.truncate(new_count);
+            }
+            std::cmp::Ordering::Equal => {}
+        }
+    }
+}
+
 #[derive(Default)]
 
 struct AppState {
     config: UiConfig,
 
     game: GameState,
+
+    random_things: RandomThings,
 }
 
 #[derive(Copy, Clone)]
@@ -248,10 +335,14 @@ static APP_STATE: OnceLock<Mutex<AppState>> = OnceLock::new();
 
 fn app_state() -> &'static Mutex<AppState> {
     APP_STATE.get_or_init(|| {
-        Mutex::new(AppState {
+        let mut app = AppState {
             config: load_config_from_registry(),
             game: GameState::default(),
-        })
+            random_things: RandomThings::default(),
+        };
+        app.random_things.config = load_random_things_config();
+        app.random_things.validate_and_fix_config();
+        Mutex::new(app)
     })
 }
 
@@ -329,6 +420,206 @@ fn save_config_to_registry(cfg: &UiConfig) {
     let _ = registry::set_u32("CheatCards", if cfg.cheat_cards { 1 } else { 0 });
 
     let _ = registry::set_u32("ClassicLayout", if cfg.classic_layout { 1 } else { 0 });
+}
+
+fn load_random_things_config() -> RandomThingsConfig {
+    let def = RandomThingsConfig::default();
+    let mut cfg = RandomThingsConfig {
+        multiplier: registry::rt_get_u32("Multiplier", def.multiplier as u32) as i32,
+        count: registry::rt_get_u32("Number of", def.count as u32) as usize,
+        interval_ms: registry::rt_get_u32("Time interval", def.interval_ms),
+        enabled: registry::rt_get_u32("They exist", if def.enabled { 1 } else { 0 }) != 0,
+        icon_twirl_enabled: registry::rt_get_u32(
+            "Icon twirl",
+            if def.icon_twirl_enabled { 1 } else { 0 },
+        ) != 0,
+    };
+    cfg.multiplier = cfg.multiplier.clamp(1, 20);
+    cfg.count = cfg.count.clamp(1, 4);
+    cfg.interval_ms = cfg.interval_ms.clamp(20, 1000);
+    cfg
+}
+
+fn save_random_things_config(cfg: &RandomThingsConfig) {
+    let _ = registry::rt_set_u32("Multiplier", cfg.multiplier as u32);
+    let _ = registry::rt_set_u32("Number of", cfg.count as u32);
+    let _ = registry::rt_set_u32("Time interval", cfg.interval_ms);
+    let _ = registry::rt_set_u32("They exist", if cfg.enabled { 1 } else { 0 });
+    let _ = registry::rt_set_u32("Icon twirl", if cfg.icon_twirl_enabled { 1 } else { 0 });
+}
+
+unsafe fn start_random_things(hwnd: HWND) {
+    let mut app = app_state().lock().unwrap();
+    if !app.random_things.config.enabled || app.game.in_progress {
+        return;
+    }
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    app.random_things.resize_things(rc.right, rc.bottom);
+    let _ = SetTimer(
+        hwnd,
+        ID_RNDTIMER,
+        app.random_things.config.interval_ms,
+        None,
+    );
+    app.random_things.random_timer_active = true;
+}
+
+unsafe fn stop_random_things(hwnd: HWND) {
+    let mut app = app_state().lock().unwrap();
+    if app.random_things.random_timer_active {
+        let _ = KillTimer(hwnd, ID_RNDTIMER);
+        app.random_things.random_timer_active = false;
+        drop(app);
+        let _ = InvalidateRect(hwnd, None, BOOL(1));
+    }
+}
+
+unsafe fn start_icon_twirl(hwnd: HWND) {
+    let mut app = app_state().lock().unwrap();
+    if !app.random_things.config.icon_twirl_enabled {
+        return;
+    }
+    let _ = SetTimer(hwnd, ID_ICNTIMER, 100, None);
+    app.random_things.icon_timer_active = true;
+    app.random_things.icon_count = 0;
+}
+
+unsafe fn stop_icon_twirl(hwnd: HWND) {
+    let mut app = app_state().lock().unwrap();
+    if app.random_things.icon_timer_active {
+        let _ = KillTimer(hwnd, ID_ICNTIMER);
+        app.random_things.icon_timer_active = false;
+    }
+}
+
+unsafe fn on_random_timer(hwnd: HWND) {
+    if IsIconic(hwnd).as_bool() {
+        return;
+    }
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+
+    let dpi = GetDpiForWindow(hwnd) as f32;
+    let scale = dpi / 96.0;
+
+    // When no game is in progress, entire screen is green - random things can roam anywhere
+    // (Original behavior: clear green screen with only a logo at 285,80)
+    let table_left = 0;
+    let table_top = 0;
+    let table_right = rc.right;
+    let table_bottom = rc.bottom - (24.0 * scale).round() as i32; // Leave room for status bar
+
+    let hdc = GetDC(hwnd);
+    UI_HANDLES.with(|h| {
+        let hh = h.borrow();
+        let green_brush = hh.hbr_green;
+        let mut app = app_state().lock().unwrap();
+
+        // Phase 1: Clear old positions with green
+        for thing in &app.random_things.things {
+            let rect = RECT {
+                left: thing.x,
+                top: thing.y,
+                right: thing.x + THING_SIZE,
+                bottom: thing.y + THING_SIZE,
+            };
+            let _ = FillRect(hdc, &rect, green_brush);
+        }
+
+        // Phase 2: Update positions with random walk, constrained to table area
+        let mult = app.random_things.config.multiplier;
+        let mut rng = rand::thread_rng();
+        for thing in &mut app.random_things.things {
+            let dx = mult * rng.gen_range(-1..=1);
+            let dy = mult * rng.gen_range(-1..=1);
+            thing.x += dx;
+            thing.y += dy;
+
+            // Constrain to table area boundaries
+            if thing.x < table_left {
+                thing.x = table_left;
+            }
+            if thing.x > table_right - THING_SIZE {
+                thing.x = table_right - THING_SIZE;
+            }
+            if thing.y < table_top {
+                thing.y = table_top;
+            }
+            if thing.y > table_bottom - THING_SIZE {
+                thing.y = table_bottom - THING_SIZE;
+            }
+
+            // Avoid logo at (285, 80) - original collision area was 254-316, 49-111
+            let logo_x = (285.0 * scale).round() as i32;
+            let logo_y = (80.0 * scale).round() as i32;
+            let logo_left = logo_x - (31.0 * scale).round() as i32;
+            let logo_right = logo_x + (31.0 * 2.0 * scale).round() as i32;
+            let logo_top = logo_y - (31.0 * scale).round() as i32;
+            let logo_bottom = logo_y + (31.0 * 2.0 * scale).round() as i32;
+
+            if thing.x >= logo_left
+                && thing.x <= logo_right
+                && thing.y >= logo_top
+                && thing.y <= logo_bottom
+            {
+                // Push to nearest edge of logo area
+                if thing.x < logo_x {
+                    thing.x = logo_left;
+                } else {
+                    thing.x = logo_right;
+                }
+                if thing.y < logo_y {
+                    thing.y = logo_top;
+                } else {
+                    thing.y = logo_bottom;
+                }
+            }
+        }
+
+        // Phase 3: Draw new positions
+        for thing in &app.random_things.things {
+            let name = match thing.bitmap_index {
+                0 => "CLUB",
+                1 => "DIAMOND",
+                2 => "SPADE",
+                _ => "HEART",
+            };
+            if let Ok(obj) = LoadImageW(
+                GetModuleHandleW(None).unwrap(),
+                PCWSTR(wide(name).as_ptr()),
+                IMAGE_BITMAP,
+                0,
+                0,
+                LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
+            ) {
+                blit_bitmap(
+                    hdc,
+                    HBITMAP(obj.0),
+                    thing.x,
+                    thing.y,
+                    THING_SIZE,
+                    THING_SIZE,
+                );
+            }
+        }
+    });
+    let _ = ReleaseDC(hwnd, hdc);
+}
+
+unsafe fn on_icon_timer(hwnd: HWND) {
+    if !IsIconic(hwnd).as_bool() {
+        return;
+    }
+    let mut app = app_state().lock().unwrap();
+    app.random_things.icon_count = (app.random_things.icon_count + 1) % 3;
+    let hinst = GetModuleHandleW(None).unwrap();
+    let icon_id = make_int_resource((1 + app.random_things.icon_count) as u16);
+    if let Ok(icon) = LoadIconW(hinst, icon_id) {
+        let hdc = GetDC(hwnd);
+        let _ = DrawIcon(hdc, 0, 0, icon);
+        let _ = ReleaseDC(hwnd, hdc);
+    }
 }
 
 fn request_redraw(hwnd: HWND) {
@@ -568,6 +859,11 @@ fn start_deal(hwnd: HWND) {
 
     drop(app);
 
+    // Stop random things when game starts
+    unsafe {
+        stop_random_things(hwnd);
+    }
+
     // Draw new hand before bidding (parity with legacy)
 
     request_redraw(hwnd);
@@ -647,7 +943,7 @@ fn main() -> windows::core::Result<()> {
             WINDOW_EX_STYLE::default(),
             PCWSTR(class_name.as_ptr()),
             PCWSTR(title.as_ptr()),
-            style | WS_VISIBLE,
+            style,
             CW_USEDEFAULT,
             CW_USEDEFAULT,
             width,
@@ -665,6 +961,30 @@ fn main() -> windows::core::Result<()> {
         } else {
             create_default_menu(hwnd);
         }
+
+        // Restore window position from registry before showing
+        const NO_SAVED_POS: u32 = 0x80000000; // Sentinel value
+        let saved_x = registry::get_u32("WindowX", NO_SAVED_POS);
+        let saved_y = registry::get_u32("WindowY", NO_SAVED_POS);
+
+        if saved_x != NO_SAVED_POS && saved_y != NO_SAVED_POS {
+            // Convert u32 back to i32 (preserves bit pattern for negative positions)
+            let x_pos = saved_x as i32;
+            let y_pos = saved_y as i32;
+
+            SetWindowPos(
+                hwnd,
+                None,
+                x_pos,
+                y_pos,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )?;
+        }
+
+        // Show the window
+        let _ = ShowWindow(hwnd, SW_SHOW);
 
         // Initialize shared brushes and status child window
 
@@ -801,6 +1121,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
                 let _ = app_state();
 
+                // Start Random Things if enabled
+                start_random_things(hwnd);
+
                 return LRESULT(0);
             }
 
@@ -816,6 +1139,10 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     }
                     102 => {
                         show_options_dialog(hwnd);
+                        return LRESULT(0);
+                    }
+                    103 => {
+                        show_random_things_dialog(hwnd);
                         return LRESULT(0);
                     }
                     104 => {
@@ -879,68 +1206,96 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 };
 
                 let green = CreateSolidBrush(COLORREF(128 << 8));
-                FillRect(memdc, &table_rc, green);
-                draw_bevel_box(memdc, info_rc);
-                FillRect(memdc, &info_rc, green);
-                draw_info_panel(memdc, &info_rc, scale);
-                FillRect(memdc, &hand_rc, green);
 
-                let classic = app_state().lock().unwrap().config.classic_layout;
-                if classic {
-                    draw_hand_classic(memdc);
-                } else {
-                    draw_hand(memdc, &hand_rc, scale);
-                }
+                let game_in_progress = app_state().lock().unwrap().game.in_progress;
 
-                let pb_rc = RECT {
-                    left: (20.0 * scale).round() as i32,
-                    top: (20.0 * scale).round() as i32,
-                    right: (130.0 * scale).round() as i32,
-                    bottom: (47.0 * scale).round() as i32,
-                };
-                draw_bevel_box(memdc, pb_rc);
-                let played_lbl = wide("Played cards:");
-                let _ = TextOutW(
-                    memdc,
-                    (30.0 * scale).round() as i32,
-                    (26.0 * scale).round() as i32,
-                    &played_lbl[..played_lbl.len() - 1],
-                );
+                if game_in_progress {
+                    // Game in progress: Draw all UI elements
+                    FillRect(memdc, &table_rc, green);
+                    draw_bevel_box(memdc, info_rc);
+                    FillRect(memdc, &info_rc, green);
+                    draw_info_panel(memdc, &info_rc, scale);
+                    FillRect(memdc, &hand_rc, green);
 
-                let yh_rc = RECT {
-                    left: (20.0 * scale).round() as i32,
-                    top: (198.0 * scale).round() as i32,
-                    right: (130.0 * scale).round() as i32,
-                    bottom: (225.0 * scale).round() as i32,
-                };
-                draw_bevel_box(memdc, yh_rc);
-                let hand_lbl = wide("Your hand:");
-                let _ = TextOutW(
-                    memdc,
-                    (30.0 * scale).round() as i32,
-                    (204.0 * scale).round() as i32,
-                    &hand_lbl[..hand_lbl.len() - 1],
-                );
+                    let classic = app_state().lock().unwrap().config.classic_layout;
+                    if classic {
+                        draw_hand_classic(memdc);
+                    } else {
+                        draw_hand(memdc, &hand_rc, scale);
+                    }
 
-                let other_rc = RECT {
-                    left: (410.0 * scale).round() as i32,
-                    top: (160.0 * scale).round() as i32,
-                    right: (585.0 * scale).round() as i32,
-                    bottom: (225.0 * scale).round() as i32,
-                };
-                draw_bevel_box(memdc, other_rc);
-                draw_extra_info(memdc, &other_rc, scale);
-
-                if classic {
-                    draw_trick_classic(memdc);
-                } else {
-                    let trick_rc = RECT {
-                        left: 0,
-                        top: 0,
-                        right: info_left,
-                        bottom: info_rc.bottom,
+                    let pb_rc = RECT {
+                        left: (20.0 * scale).round() as i32,
+                        top: (20.0 * scale).round() as i32,
+                        right: (130.0 * scale).round() as i32,
+                        bottom: (47.0 * scale).round() as i32,
                     };
-                    draw_trick(memdc, &trick_rc, scale);
+                    draw_bevel_box(memdc, pb_rc);
+                    let played_lbl = wide("Played cards:");
+                    let _ = TextOutW(
+                        memdc,
+                        (30.0 * scale).round() as i32,
+                        (26.0 * scale).round() as i32,
+                        &played_lbl[..played_lbl.len() - 1],
+                    );
+
+                    let yh_rc = RECT {
+                        left: (20.0 * scale).round() as i32,
+                        top: (198.0 * scale).round() as i32,
+                        right: (130.0 * scale).round() as i32,
+                        bottom: (225.0 * scale).round() as i32,
+                    };
+                    draw_bevel_box(memdc, yh_rc);
+                    let hand_lbl = wide("Your hand:");
+                    let _ = TextOutW(
+                        memdc,
+                        (30.0 * scale).round() as i32,
+                        (204.0 * scale).round() as i32,
+                        &hand_lbl[..hand_lbl.len() - 1],
+                    );
+
+                    let other_rc = RECT {
+                        left: (410.0 * scale).round() as i32,
+                        top: (160.0 * scale).round() as i32,
+                        right: (585.0 * scale).round() as i32,
+                        bottom: (225.0 * scale).round() as i32,
+                    };
+                    draw_bevel_box(memdc, other_rc);
+                    draw_extra_info(memdc, &other_rc, scale);
+
+                    if classic {
+                        draw_trick_classic(memdc);
+                    } else {
+                        let trick_rc = RECT {
+                            left: 0,
+                            top: 0,
+                            right: info_left,
+                            bottom: info_rc.bottom,
+                        };
+                        draw_trick(memdc, &trick_rc, scale);
+                    }
+                } else {
+                    // No game: Just green background with IC_LOGO (for random things)
+                    FillRect(memdc, &rc, green);
+
+                    // Draw IC_LOGO at fixed position (matching original at 285, 80)
+                    if let Ok(obj) = LoadImageW(
+                        GetModuleHandleW(None).unwrap(),
+                        PCWSTR(wide("IC_LOGO").as_ptr()),
+                        IMAGE_BITMAP,
+                        0,
+                        0,
+                        LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
+                    ) {
+                        blit_bitmap(
+                            memdc,
+                            HBITMAP(obj.0),
+                            (285.0 * scale).round() as i32,
+                            (80.0 * scale).round() as i32,
+                            31,
+                            31,
+                        );
+                    }
                 }
 
                 let _ = BitBlt(
@@ -963,6 +1318,33 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 let _ = EndPaint(hwnd, &ps);
 
                 return LRESULT(0);
+            }
+
+            WM_TIMER => match wparam.0 {
+                ID_RNDTIMER => {
+                    on_random_timer(hwnd);
+                    return LRESULT(0);
+                }
+                ID_ICNTIMER => {
+                    on_icon_timer(hwnd);
+                    return LRESULT(0);
+                }
+                _ => {}
+            },
+
+            WM_SIZE => {
+                let size_type = wparam.0 as u32;
+                match size_type {
+                    SIZE_MINIMIZED => {
+                        stop_random_things(hwnd);
+                        start_icon_twirl(hwnd);
+                    }
+                    SIZE_RESTORED | SIZE_MAXIMIZED => {
+                        stop_icon_twirl(hwnd);
+                        start_random_things(hwnd);
+                    }
+                    _ => {}
+                }
             }
 
             WM_DESTROY => {
@@ -999,6 +1381,14 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 }
 
                 let _st = app_state().lock().unwrap();
+
+                // Save window position before destroying
+                let mut rect = RECT::default();
+                if GetWindowRect(hwnd, &mut rect).is_ok() {
+                    // Cast i32 to u32 (preserves bit pattern for negative positions)
+                    let _ = registry::set_u32("WindowX", rect.left as u32);
+                    let _ = registry::set_u32("WindowY", rect.top as u32);
+                }
 
                 PostQuitMessage(0);
 
@@ -1257,6 +1647,13 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
         }
 
         drop(app);
+
+        // Restart random things when game ends
+        if final_round {
+            unsafe {
+                start_random_things(hwnd);
+            }
+        }
 
         set_status("");
 
@@ -2724,6 +3121,220 @@ extern "system" fn call_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: 
 
         0
     }
+}
+
+extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
+    unsafe {
+        match msg {
+            WM_INITDIALOG => {
+                let app = app_state().lock().unwrap();
+                let cfg = &app.random_things.config;
+                let mult_sb = GetDlgItem(hwnd, IDC_RNDMULTSC).unwrap();
+                let _ = SendMessageW(mult_sb, SBM_SETRANGE, WPARAM(1), LPARAM(20));
+                let _ = SendMessageW(
+                    mult_sb,
+                    SBM_SETPOS,
+                    WPARAM(cfg.multiplier as usize),
+                    LPARAM(1),
+                );
+                let numb_sb = GetDlgItem(hwnd, IDC_RNDNUMBSC).unwrap();
+                let _ = SendMessageW(numb_sb, SBM_SETRANGE, WPARAM(1), LPARAM(4));
+                let _ = SendMessageW(numb_sb, SBM_SETPOS, WPARAM(cfg.count), LPARAM(1));
+                let time_sb = GetDlgItem(hwnd, IDC_RNDTIMESC).unwrap();
+                let _ = SendMessageW(time_sb, SBM_SETRANGE, WPARAM(20), LPARAM(1000));
+                let _ = SendMessageW(
+                    time_sb,
+                    SBM_SETPOS,
+                    WPARAM(cfg.interval_ms as usize),
+                    LPARAM(1),
+                );
+                let mult_text = wide(&format!("{}", cfg.multiplier));
+                let _ = SetDlgItemTextW(hwnd, IDC_RNDMULTST, PCWSTR(mult_text.as_ptr()));
+                let numb_text = wide(&format!("{}", cfg.count));
+                let _ = SetDlgItemTextW(hwnd, IDC_RNDNUMBST, PCWSTR(numb_text.as_ptr()));
+                let time_text = wide(&format!("{}", cfg.interval_ms));
+                let _ = SetDlgItemTextW(hwnd, IDC_RNDTIMEST, PCWSTR(time_text.as_ptr()));
+                let _ = SendDlgItemMessageW(
+                    hwnd,
+                    IDC_RNDEXISCK,
+                    BM_SETCHECK,
+                    WPARAM(if cfg.enabled {
+                        BST_CHECKED_U
+                    } else {
+                        BST_UNCHECKED_U
+                    }),
+                    LPARAM(0),
+                );
+                let _ = SendDlgItemMessageW(
+                    hwnd,
+                    IDC_RNDICONCK,
+                    BM_SETCHECK,
+                    WPARAM(if cfg.icon_twirl_enabled {
+                        BST_CHECKED_U
+                    } else {
+                        BST_UNCHECKED_U
+                    }),
+                    LPARAM(0),
+                );
+                1
+            }
+            WM_HSCROLL => {
+                let scroll_code = loword(wparam.0 as u32) as i32;
+                let scrollbar = HWND(lparam.0 as _);
+                let sb_id = GetDlgCtrlID(scrollbar);
+
+                // Get current position and range
+                let mut pos = SendMessageW(scrollbar, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+
+                // Determine range based on which scrollbar
+                let (min, max, step) = match sb_id {
+                    IDC_RNDMULTSC => (1, 20, 1),
+                    IDC_RNDNUMBSC => (1, 4, 1),
+                    IDC_RNDTIMESC => (20, 1000, 10),
+                    _ => return 0,
+                };
+
+                // Update position based on scroll code
+                if scroll_code == SB_LINEUP.0 || scroll_code == SB_LINELEFT.0 {
+                    pos = (pos - step).max(min);
+                } else if scroll_code == SB_LINEDOWN.0 || scroll_code == SB_LINERIGHT.0 {
+                    pos = (pos + step).min(max);
+                } else if scroll_code == SB_PAGEUP.0 || scroll_code == SB_PAGELEFT.0 {
+                    pos = (pos - step * 5).max(min);
+                } else if scroll_code == SB_PAGEDOWN.0 || scroll_code == SB_PAGERIGHT.0 {
+                    pos = (pos + step * 5).min(max);
+                } else if scroll_code == SB_THUMBTRACK.0 || scroll_code == SB_THUMBPOSITION.0 {
+                    pos = (wparam.0 >> 16) as i32;
+                    pos = pos.clamp(min, max);
+                } else if scroll_code == SB_TOP.0 || scroll_code == SB_LEFT.0 {
+                    pos = min;
+                } else if scroll_code == SB_BOTTOM.0 || scroll_code == SB_RIGHT.0 {
+                    pos = max;
+                } else {
+                    return 0;
+                }
+
+                // Set new position
+                let _ = SendMessageW(scrollbar, SBM_SETPOS, WPARAM(pos as usize), LPARAM(1));
+
+                // Update corresponding static text
+                let text = wide(&format!("{}", pos));
+                match sb_id {
+                    IDC_RNDMULTSC => {
+                        let _ = SetDlgItemTextW(hwnd, IDC_RNDMULTST, PCWSTR(text.as_ptr()));
+                    }
+                    IDC_RNDNUMBSC => {
+                        let _ = SetDlgItemTextW(hwnd, IDC_RNDNUMBST, PCWSTR(text.as_ptr()));
+                    }
+                    IDC_RNDTIMESC => {
+                        let _ = SetDlgItemTextW(hwnd, IDC_RNDTIMEST, PCWSTR(text.as_ptr()));
+                    }
+                    _ => {}
+                }
+                0
+            }
+            WM_COMMAND => {
+                let id = loword(wparam.0 as u32) as i32;
+                match id {
+                    1 => {
+                        // IDOK
+                        let main_hwnd = GetParent(hwnd).unwrap();
+                        let mult_sb = GetDlgItem(hwnd, IDC_RNDMULTSC).unwrap();
+                        let multiplier =
+                            SendMessageW(mult_sb, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+                        let numb_sb = GetDlgItem(hwnd, IDC_RNDNUMBSC).unwrap();
+                        let count =
+                            SendMessageW(numb_sb, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as usize;
+                        let time_sb = GetDlgItem(hwnd, IDC_RNDTIMESC).unwrap();
+                        let interval_ms =
+                            SendMessageW(time_sb, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as u32;
+                        let enabled = SendDlgItemMessageW(
+                            hwnd,
+                            IDC_RNDEXISCK,
+                            BM_GETCHECK,
+                            WPARAM(0),
+                            LPARAM(0),
+                        )
+                        .0 as usize
+                            == BST_CHECKED_U;
+                        let icon_twirl = SendDlgItemMessageW(
+                            hwnd,
+                            IDC_RNDICONCK,
+                            BM_GETCHECK,
+                            WPARAM(0),
+                            LPARAM(0),
+                        )
+                        .0 as usize
+                            == BST_CHECKED_U;
+                        {
+                            let mut app = app_state().lock().unwrap();
+                            let old_interval = app.random_things.config.interval_ms;
+                            let old_enabled = app.random_things.config.enabled;
+                            let old_count = app.random_things.config.count;
+                            let old_icon_twirl = app.random_things.config.icon_twirl_enabled;
+                            app.random_things.config.multiplier = multiplier;
+                            app.random_things.config.count = count;
+                            app.random_things.config.interval_ms = interval_ms;
+                            app.random_things.config.enabled = enabled;
+                            app.random_things.config.icon_twirl_enabled = icon_twirl;
+                            app.random_things.validate_and_fix_config();
+                            save_random_things_config(&app.random_things.config);
+                            if app.random_things.random_timer_active && interval_ms != old_interval
+                            {
+                                let _ = KillTimer(main_hwnd, ID_RNDTIMER);
+                                let _ = SetTimer(main_hwnd, ID_RNDTIMER, interval_ms, None);
+                            }
+                            if enabled != old_enabled {
+                                if enabled && !app.game.in_progress {
+                                    drop(app);
+                                    start_random_things(main_hwnd);
+                                    app = app_state().lock().unwrap();
+                                } else if !enabled {
+                                    drop(app);
+                                    stop_random_things(main_hwnd);
+                                    app = app_state().lock().unwrap();
+                                }
+                            }
+                            if (count != old_count) || (enabled && !old_enabled) {
+                                let mut rc = RECT::default();
+                                let _ = GetClientRect(main_hwnd, &mut rc);
+                                app.random_things.resize_things(rc.right, rc.bottom);
+                            }
+                            if icon_twirl != old_icon_twirl {
+                                if icon_twirl && IsIconic(main_hwnd).as_bool() {
+                                    drop(app);
+                                    start_icon_twirl(main_hwnd);
+                                } else if !icon_twirl {
+                                    drop(app);
+                                    stop_icon_twirl(main_hwnd);
+                                }
+                            }
+                        }
+                        let _ = EndDialog(hwnd, 1);
+                        1
+                    }
+                    2 => {
+                        // IDCANCEL
+                        let _ = EndDialog(hwnd, 0);
+                        1
+                    }
+                    _ => 0,
+                }
+            }
+            _ => 0,
+        }
+    }
+}
+
+unsafe fn show_random_things_dialog(parent: HWND) {
+    let hinst = GetModuleHandleW(None).unwrap();
+    let _ = DialogBoxParamW(
+        hinst,
+        make_int_resource(3006),
+        parent,
+        Some(random_dlg_proc),
+        LPARAM(0),
+    );
 }
 
 // High scores persistence

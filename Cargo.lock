@@ -99,6 +99,7 @@ dependencies = [
  "estwhi-core",
  "rand",
  "windows",
+ "winreg",
 ]
 
 [[package]]

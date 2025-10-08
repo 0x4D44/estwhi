@@ -131,3 +131,56 @@ fn wides(s: &str) -> Vec<u16> {
         .chain(std::iter::once(0))
         .collect()
 }
+
+// Random Things registry functions (separate subkey)
+const RT_SUBKEY: &str = "Software\\Estwhi\\Random Things";
+
+pub fn rt_set_u32(name: &str, value: u32) -> windows::core::Result<()> {
+    unsafe {
+        let mut hkey = HKEY::default();
+        let sub = wides(RT_SUBKEY);
+        let status = RegCreateKeyW(ROOT, PCWSTR(sub.as_ptr()), &mut hkey);
+        if status != ERROR_SUCCESS {
+            return Err(windows::core::Error::from_win32());
+        }
+        let n = wides(name);
+        let bytes = &value.to_le_bytes();
+        let status = RegSetValueExW(hkey, PCWSTR(n.as_ptr()), 0, REG_DWORD, Some(bytes));
+        let _ = RegCloseKey(hkey);
+        if status == ERROR_SUCCESS {
+            Ok(())
+        } else {
+            Err(windows::core::Error::from_win32())
+        }
+    }
+}
+
+pub fn rt_get_u32(name: &str, default: u32) -> u32 {
+    unsafe {
+        let mut hkey = HKEY::default();
+        let sub = wides(RT_SUBKEY);
+        if RegOpenKeyExW(ROOT, PCWSTR(sub.as_ptr()), 0, KEY_QUERY_VALUE, &mut hkey) != ERROR_SUCCESS
+        {
+            return default;
+        }
+        let n = wides(name);
+        let mut typ: REG_VALUE_TYPE = REG_DWORD;
+        let mut buf: u32 = 0;
+        let mut len = std::mem::size_of::<u32>() as u32;
+        let status = RegGetValueW(
+            hkey,
+            None,
+            PCWSTR(n.as_ptr()),
+            RRF_RT_REG_DWORD,
+            Some(&mut typ),
+            Some(&mut buf as *mut _ as *mut _),
+            Some(&mut len),
+        );
+        let _ = RegCloseKey(hkey);
+        if status == ERROR_SUCCESS {
+            buf
+        } else {
+            default
+        }
+    }
+}
