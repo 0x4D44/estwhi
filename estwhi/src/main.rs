@@ -5,13 +5,14 @@
 
 use windows::core::PCWSTR;
 
-use windows::Win32::Foundation::{BOOL, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{BOOL, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateCompatibleDC as CreateCDC, CreateSolidBrush, DeleteDC, DeleteDC as DeleteDc,
-    DeleteObject, EndPaint, FillRect, SelectObject, SelectObject as SelectObj, SetBkMode,
-    SetTextColor, TextOutW, HBITMAP, HBRUSH, HDC, NOTSRCCOPY, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    DeleteObject, EndPaint, FillRect, GetSysColor, SelectObject, SelectObject as SelectObj,
+    SetBkMode, SetTextColor, TextOutW, COLOR_BTNFACE, COLOR_WINDOWTEXT, HBITMAP, HBRUSH, HDC,
+    NOTSRCCOPY, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 
 use windows::Win32::Graphics::Gdi::{GetObjectW, SetStretchBltMode, StretchBlt, BITMAP, HALFTONE};
@@ -86,6 +87,14 @@ const BST_UNCHECKED_U: usize = 0;
 const CARD_W: i32 = 71;
 
 const CARD_H: i32 = 96;
+
+// Cheat window constants
+const CHEAT_WINDOW_CLASS: &str = "EstwhiCheatCards";
+const CHEAT_WINDOW_WIDTH_BASE: f32 = 400.0;
+const CHEAT_WINDOW_HEIGHT_BASE: f32 = 200.0;
+const SMALL_CARD_WIDTH_BASE: f32 = 41.0;
+const SMALL_CARD_HEIGHT_BASE: f32 = 55.0;
+const SMALL_MIN_WIDTH_BASE: f32 = 25.0;
 
 // Hand row absolute layout
 
@@ -297,12 +306,20 @@ impl RandomThings {
 
 #[derive(Default)]
 
+struct CheatWindowState {
+    hwnd: Option<isize>,
+    offset_x: i32, // Offset from main window left edge
+    offset_y: i32, // Offset from main window top edge
+}
+
 struct AppState {
     config: UiConfig,
 
     game: GameState,
 
     random_things: RandomThings,
+
+    cheat_window: CheatWindowState,
 }
 
 #[derive(Copy, Clone)]
@@ -339,6 +356,7 @@ fn app_state() -> &'static Mutex<AppState> {
             config: load_config_from_registry(),
             game: GameState::default(),
             random_things: RandomThings::default(),
+            cheat_window: load_cheat_window_state(),
         };
         app.random_things.config = load_random_things_config();
         app.random_things.validate_and_fix_config();
@@ -420,6 +438,19 @@ fn save_config_to_registry(cfg: &UiConfig) {
     let _ = registry::set_u32("CheatCards", if cfg.cheat_cards { 1 } else { 0 });
 
     let _ = registry::set_u32("ClassicLayout", if cfg.classic_layout { 1 } else { 0 });
+}
+
+fn load_cheat_window_state() -> CheatWindowState {
+    CheatWindowState {
+        hwnd: None,
+        offset_x: registry::get_u32("CheatWindowOffsetX", 100) as i32,
+        offset_y: registry::get_u32("CheatWindowOffsetY", 100) as i32,
+    }
+}
+
+fn save_cheat_window_state(state: &CheatWindowState) {
+    let _ = registry::set_u32("CheatWindowOffsetX", state.offset_x as u32);
+    let _ = registry::set_u32("CheatWindowOffsetY", state.offset_y as u32);
 }
 
 fn load_random_things_config() -> RandomThingsConfig {
@@ -629,7 +660,9 @@ fn request_redraw(hwnd: HWND) {
 }
 
 fn set_status(text: &str) {
-    let w = wide(text);
+    // Add leading spaces for left padding in status bar
+    let padded_text = format!("  {}", text);
+    let w = wide(&padded_text);
 
     UI_HANDLES.with(|h| unsafe {
         let hh = h.borrow();
@@ -859,6 +892,11 @@ fn start_deal(hwnd: HWND) {
 
     drop(app);
 
+    // Update cheat cards window after dealing
+    unsafe {
+        update_cheat_cards_window();
+    }
+
     // Stop random things when game starts
     unsafe {
         stop_random_things(hwnd);
@@ -917,6 +955,9 @@ fn main() -> windows::core::Result<()> {
         if atom == 0 {
             return Err(windows::core::Error::from_win32());
         }
+
+        // Register cheat cards window class
+        register_cheat_window_class(hinstance)?;
 
         let title = wide("Estimation Whist");
 
@@ -997,16 +1038,15 @@ fn main() -> windows::core::Result<()> {
 
             let scale = dpi as f32 / 96.0;
             let status_h = (STATUS_HEIGHT * scale).round() as i32;
-            let status_padding = (6.0 * scale).round() as i32; // Left padding for status text
 
             let shwnd = CreateWindowExW(
                 WINDOW_EX_STYLE::default(),
                 PCWSTR(wide("STATIC").as_ptr()),
-                PCWSTR(wide("Ready").as_ptr()),
+                PCWSTR(wide("  Ready").as_ptr()), // Leading spaces for left padding
                 WS_CHILD | WS_VISIBLE | WINDOW_STYLE(0x200), // SS_CENTERIMAGE for vertical centering
-                status_padding,
+                0,
                 rc.bottom - status_h,
-                rc.right - rc.left - status_padding,
+                rc.right - rc.left,
                 status_h,
                 hwnd,
                 None,
@@ -1092,6 +1132,26 @@ fn main() -> windows::core::Result<()> {
 
         let _ = ShowWindow(hwnd, SW_SHOW);
 
+        // Create cheat window if flag is set
+        {
+            let should_create = {
+                let app = app_state().lock().unwrap();
+                app.config.cheat_cards
+            };
+
+            if should_create {
+                if let Err(_) = create_cheat_cards_window(hwnd) {
+                    MessageBoxW(
+                        hwnd,
+                        PCWSTR(wide("Could not create cheat cards window!").as_ptr()),
+                        PCWSTR(wide("Error").as_ptr()),
+                        MB_ICONHAND | MB_OK,
+                    );
+                    app_state().lock().unwrap().config.cheat_cards = false;
+                }
+            }
+        }
+
         // Load accelerators
 
         let haccel = LoadAcceleratorsW(hinstance, make_int_resource(2001)).ok();
@@ -1139,7 +1199,41 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         return LRESULT(0);
                     }
                     102 => {
+                        // Options - with cheat window toggle logic
+                        let old_cheat_flag = {
+                            let app = app_state().lock().unwrap();
+                            app.config.cheat_cards
+                        };
+
                         show_options_dialog(hwnd);
+
+                        // Check if cheat cards flag changed
+                        let new_cheat_flag = {
+                            let app = app_state().lock().unwrap();
+                            app.config.cheat_cards
+                        };
+
+                        // Toggle window if flag changed
+                        if old_cheat_flag != new_cheat_flag {
+                            if new_cheat_flag {
+                                // Create cheat window
+                                if let Err(_) = create_cheat_cards_window(hwnd) {
+                                    MessageBoxW(
+                                        hwnd,
+                                        PCWSTR(
+                                            wide("Could not create cheat cards window!").as_ptr(),
+                                        ),
+                                        PCWSTR(wide("Error").as_ptr()),
+                                        MB_ICONHAND | MB_OK,
+                                    );
+                                    app_state().lock().unwrap().config.cheat_cards = false;
+                                }
+                            } else {
+                                // Close cheat window
+                                close_cheat_cards_window();
+                            }
+                        }
+
                         return LRESULT(0);
                     }
                     103 => {
@@ -1160,6 +1254,43 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 handle_click_play(hwnd, mx, my);
                 request_redraw(hwnd);
                 return LRESULT(0);
+            }
+
+            WM_MOVE => {
+                // Move cheat window to maintain relative position
+                let hwnd_opt = {
+                    let app = app_state().lock().unwrap();
+                    app.cheat_window.hwnd
+                };
+
+                if let Some(hwnd_raw) = hwnd_opt {
+                    let cheat_hwnd = HWND(hwnd_raw as *mut _);
+
+                    // Get new main window position
+                    let mut parent_rect = RECT::default();
+                    if GetWindowRect(hwnd, &mut parent_rect).is_ok() {
+                        // Get offset
+                        let (offset_x, offset_y) = {
+                            let app = app_state().lock().unwrap();
+                            (app.cheat_window.offset_x, app.cheat_window.offset_y)
+                        };
+
+                        // Calculate new absolute position
+                        let new_x = parent_rect.left + offset_x;
+                        let new_y = parent_rect.top + offset_y;
+
+                        // Move cheat window
+                        let _ = SetWindowPos(
+                            cheat_hwnd,
+                            None,
+                            new_x,
+                            new_y,
+                            0,
+                            0,
+                            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+                        );
+                    }
+                }
             }
 
             WM_PAINT => {
@@ -1380,6 +1511,9 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         }
                     }
                 }
+
+                // Clean up cheat cards window
+                cleanup_cheat_window();
 
                 let _st = app_state().lock().unwrap();
 
@@ -1696,6 +1830,11 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
         }
 
         drop(app);
+
+        // Update cheat cards window after trick cleared
+        unsafe {
+            update_cheat_cards_window();
+        }
 
         set_status("");
 
@@ -2332,6 +2471,11 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
             }
 
             drop(app);
+
+            // Update cheat cards window after AI plays
+            unsafe {
+                update_cheat_cards_window();
+            }
         } else {
             // Trick full
 
@@ -2602,6 +2746,332 @@ unsafe fn show_scores_dialog(parent: HWND) {
         Some(scores_dlg_proc),
         LPARAM(0),
     );
+}
+
+// Cheat Cards Window Functions
+
+unsafe fn register_cheat_window_class(hinstance: HMODULE) -> windows::core::Result<()> {
+    let class_name = wide(CHEAT_WINDOW_CLASS);
+
+    let wc = WNDCLASSW {
+        style: CS_HREDRAW | CS_VREDRAW,
+        lpfnWndProc: Some(cheat_window_proc),
+        cbClsExtra: 0,
+        cbWndExtra: 0,
+        hInstance: hinstance.into(),
+        hIcon: HICON::default(),
+        hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+        hbrBackground: HBRUSH(std::ptr::null_mut()),
+        lpszMenuName: PCWSTR::null(),
+        lpszClassName: PCWSTR(class_name.as_ptr()),
+    };
+
+    let atom = RegisterClassW(&wc);
+    if atom == 0 {
+        return Err(windows::core::Error::from_win32());
+    }
+
+    Ok(())
+}
+
+unsafe fn create_cheat_cards_window(parent_hwnd: HWND) -> windows::core::Result<HWND> {
+    // Get main window position
+    let mut parent_rect = RECT::default();
+    GetWindowRect(parent_hwnd, &mut parent_rect)?;
+
+    // Get offset from app state
+    let (offset_x, offset_y) = {
+        let app = app_state().lock().unwrap();
+        (app.cheat_window.offset_x, app.cheat_window.offset_y)
+    };
+
+    // Calculate absolute position: main window + offset
+    let x = parent_rect.left + offset_x;
+    let y = parent_rect.top + offset_y;
+
+    let dpi = GetDpiForWindow(parent_hwnd) as f32;
+    let scale = dpi / 96.0;
+
+    let width = (CHEAT_WINDOW_WIDTH_BASE * scale).round() as i32;
+    let height = (CHEAT_WINDOW_HEIGHT_BASE * scale).round() as i32;
+
+    let hwnd = CreateWindowExW(
+        WINDOW_EX_STYLE::default(),
+        PCWSTR(wide(CHEAT_WINDOW_CLASS).as_ptr()),
+        PCWSTR(wide("Cheat Information - Cards").as_ptr()),
+        WS_POPUP | WS_CAPTION | WS_SYSMENU | WS_VISIBLE,
+        x,
+        y,
+        width,
+        height,
+        parent_hwnd,
+        None,
+        GetModuleHandleW(None)?,
+        None,
+    )?;
+
+    app_state().lock().unwrap().cheat_window.hwnd = Some(hwnd.0 as isize);
+    Ok(hwnd)
+}
+
+unsafe fn close_cheat_cards_window() {
+    let hwnd_opt = {
+        let app = app_state().lock().unwrap();
+        app.cheat_window.hwnd
+    };
+
+    if let Some(hwnd_raw) = hwnd_opt {
+        let hwnd = HWND(hwnd_raw as *mut _);
+        let _ = DestroyWindow(hwnd);
+    }
+}
+
+unsafe extern "system" fn cheat_window_proc(
+    hwnd: HWND,
+    msg: u32,
+    wparam: WPARAM,
+    lparam: LPARAM,
+) -> LRESULT {
+    match msg {
+        WM_PAINT => {
+            draw_cheat_cards(hwnd);
+            return LRESULT(0);
+        }
+
+        WM_MOVE => {
+            // Calculate and store offset relative to parent window
+            if let Ok(parent) = GetParent(hwnd) {
+                if !parent.is_invalid() {
+                    let mut parent_rect = RECT::default();
+                    let mut cheat_rect = RECT::default();
+                    if GetWindowRect(parent, &mut parent_rect).is_ok()
+                        && GetWindowRect(hwnd, &mut cheat_rect).is_ok()
+                    {
+                        let mut app = app_state().lock().unwrap();
+                        app.cheat_window.offset_x = cheat_rect.left - parent_rect.left;
+                        app.cheat_window.offset_y = cheat_rect.top - parent_rect.top;
+                    }
+                }
+            }
+        }
+
+        WM_CLOSE => {
+            let _ = DestroyWindow(hwnd);
+            return LRESULT(0);
+        }
+
+        WM_DESTROY => {
+            // Save final offset relative to parent window
+            if let Ok(parent) = GetParent(hwnd) {
+                if !parent.is_invalid() {
+                    let mut parent_rect = RECT::default();
+                    let mut cheat_rect = RECT::default();
+                    if GetWindowRect(parent, &mut parent_rect).is_ok()
+                        && GetWindowRect(hwnd, &mut cheat_rect).is_ok()
+                    {
+                        let mut app = app_state().lock().unwrap();
+                        app.cheat_window.offset_x = cheat_rect.left - parent_rect.left;
+                        app.cheat_window.offset_y = cheat_rect.top - parent_rect.top;
+                    }
+                }
+            }
+
+            let mut app = app_state().lock().unwrap();
+            app.config.cheat_cards = false;
+            app.cheat_window.hwnd = None;
+
+            return LRESULT(0);
+        }
+
+        _ => {}
+    }
+
+    DefWindowProcW(hwnd, msg, wparam, lparam)
+}
+
+unsafe fn draw_cheat_cards(hwnd: HWND) {
+    let mut ps = PAINTSTRUCT::default();
+    let hdc = BeginPaint(hwnd, &mut ps);
+
+    let (hands, num_players, dpi) = {
+        let app = app_state().lock().unwrap();
+        (
+            app.game.hands.clone(),
+            app.game.hands.len(),
+            GetDpiForWindow(hwnd) as f32,
+        )
+    };
+
+    let scale = dpi / 96.0;
+
+    let mut rect = RECT::default();
+    GetClientRect(hwnd, &mut rect);
+
+    let green_brush = CreateSolidBrush(COLORREF(128 << 8));
+    FillRect(hdc, &rect, green_brush);
+    DeleteObject(green_brush);
+
+    if num_players < 2 {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+
+    let mut y_increment = (57.0 * scale).round() as i32;
+    if num_players > 2 {
+        let available_height = rect.bottom - (81.0 * scale).round() as i32;
+        let calculated_increment = available_height / (num_players - 2) as i32;
+        if calculated_increment < y_increment {
+            y_increment = calculated_increment;
+        }
+    }
+
+    let no_cards = if hands.len() > 1 {
+        hands[1].iter().filter(|&&c| c > 0).count()
+    } else {
+        0
+    };
+
+    if no_cards == 0 {
+        EndPaint(hwnd, &ps);
+        return;
+    }
+
+    let small_card_width = (SMALL_CARD_WIDTH_BASE * scale).round() as i32;
+    let small_card_height = (SMALL_CARD_HEIGHT_BASE * scale).round() as i32;
+    let small_min_width = (SMALL_MIN_WIDTH_BASE * scale).round() as i32;
+
+    let act_width = if no_cards > 1 {
+        let available_width = (360.0 * scale).round() as i32 - small_card_width;
+        let calculated = available_width / (no_cards - 1) as i32;
+
+        if calculated > small_min_width {
+            calculated.min(small_card_width + (10.0 * scale).round() as i32)
+        } else {
+            small_min_width
+        }
+    } else {
+        small_card_width
+    };
+
+    SetBkMode(hdc, TRANSPARENT);
+    SetTextColor(hdc, COLORREF(GetSysColor(COLOR_WINDOWTEXT)));
+
+    for player_idx in 1..num_players {
+        let player_number = player_idx + 1;
+        let row_index = player_idx - 1;
+
+        let text_y = (14.0 * scale).round() as i32 + y_increment * row_index as i32;
+        let card_y = (4.0 * scale).round() as i32 + y_increment * row_index as i32;
+
+        let player_text = player_number.to_string();
+        let player_wide = wide(&player_text);
+        TextOutW(
+            hdc,
+            (10.0 * scale).round() as i32,
+            text_y,
+            &player_wide[..player_wide.len() - 1],
+        );
+
+        let mut card_index = 0;
+        for &card_id in &hands[player_idx] {
+            if card_id > 0 {
+                let card_x = (30.0 * scale).round() as i32 + card_index * act_width;
+
+                draw_card_scaled(
+                    hdc,
+                    card_x,
+                    card_y,
+                    card_id,
+                    small_card_width,
+                    small_card_height,
+                );
+
+                card_index += 1;
+            }
+        }
+    }
+
+    EndPaint(hwnd, &ps);
+}
+
+unsafe fn draw_card_scaled(
+    hdc: HDC,
+    x: i32,
+    y: i32,
+    card_id: u32,
+    dest_width: i32,
+    dest_height: i32,
+) {
+    let hbmp = match get_card_bitmap(card_id) {
+        Some(bmp) => bmp,
+        None => return,
+    };
+
+    let memdc = CreateCompatibleDC(hdc);
+    let old_bmp = SelectObject(memdc, hbmp);
+
+    let _ = StretchBlt(
+        hdc,
+        x,
+        y,
+        dest_width,
+        dest_height,
+        memdc,
+        0,
+        0,
+        CARD_W,
+        CARD_H,
+        SRCCOPY,
+    );
+
+    SelectObject(memdc, old_bmp);
+    DeleteDC(memdc);
+}
+
+unsafe fn update_cheat_cards_window() {
+    let hwnd_opt = {
+        let app = app_state().lock().unwrap();
+        app.cheat_window.hwnd
+    };
+
+    if let Some(hwnd_raw) = hwnd_opt {
+        let hwnd = HWND(hwnd_raw as *mut _);
+        InvalidateRect(hwnd, None, BOOL(1));
+    }
+}
+
+unsafe fn cleanup_cheat_window() {
+    let hwnd_opt = {
+        let app = app_state().lock().unwrap();
+        app.cheat_window.hwnd
+    };
+
+    if let Some(hwnd_raw) = hwnd_opt {
+        let hwnd = HWND(hwnd_raw as *mut _);
+
+        // Calculate and save offset before destroying
+        if let Ok(parent) = GetParent(hwnd) {
+            if !parent.is_invalid() {
+                let mut parent_rect = RECT::default();
+                let mut cheat_rect = RECT::default();
+                if GetWindowRect(parent, &mut parent_rect).is_ok()
+                    && GetWindowRect(hwnd, &mut cheat_rect).is_ok()
+                {
+                    let mut app = app_state().lock().unwrap();
+                    app.cheat_window.offset_x = cheat_rect.left - parent_rect.left;
+                    app.cheat_window.offset_y = cheat_rect.top - parent_rect.top;
+                }
+            }
+        }
+
+        DestroyWindow(hwnd);
+    }
+
+    {
+        let app = app_state().lock().unwrap();
+        save_config_to_registry(&app.config);
+        save_cheat_window_state(&app.cheat_window);
+    }
 }
 
 unsafe fn show_call_dialog(parent: HWND) -> i32 {
