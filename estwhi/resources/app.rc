@@ -1,5 +1,15 @@
 #include <windows.h>
 
+// Explicitly define standard Windows dialog button IDs
+// to ensure resource compiler finds them
+#ifndef IDOK
+#define IDOK 1
+#endif
+
+#ifndef IDCANCEL
+#define IDCANCEL 2
+#endif
+
 // Include card bitmaps
 #include "cards.rcinc"
 
@@ -43,32 +53,40 @@ BEGIN
     CTEXT "Rust Edition", -1, 10, 50, 180, 12
 END
 
-3002 DIALOGEX 0, 0, 240, 200
+3002 DIALOGEX 0, 0, 240, 224
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Options"
 FONT 9, "Segoe UI"
 BEGIN
-    LTEXT "Number of players (2-6):", -1, 10, 12, 90, 10
-    EDITTEXT 4001, 110, 10, 40, 14, ES_NUMBER
+    // Number of players - scrollbar with value label
+    LTEXT "Number of players (2-6):", -1, 10, 14, 100, 10
+    CONTROL "", 4001, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 115, 12, 85, 12
+    LTEXT "4", 4010, 205, 14, 25, 10
 
-    LTEXT "Max cards (1-15):", -1, 10, 32, 90, 10
-    EDITTEXT 4002, 110, 30, 40, 14, ES_NUMBER
+    // Max cards - scrollbar with value label (range dynamically adjusted)
+    LTEXT "Max cards (1-15):", -1, 10, 34, 100, 10
+    CONTROL "", 4002, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 115, 32, 85, 12
+    LTEXT "13", 4012, 205, 34, 25, 10
 
-    GROUPBOX "Next card notification", -1, 10, 55, 220, 35
-    AUTORADIOBUTTON "Show &dialog", 4003, 20, 68, 80, 12
-    AUTORADIOBUTTON "Wait for &mouse click", 4004, 110, 68, 110, 12
+    // Next card notification - better internal spacing
+    GROUPBOX "Next card notification", -1, 10, 56, 220, 38
+    AUTORADIOBUTTON "Show &dialog", 4003, 20, 70, 80, 12, WS_GROUP
+    AUTORADIOBUTTON "Wait for &mouse click", 4004, 110, 70, 110, 12
 
-    GROUPBOX "Scoring mode", -1, 10, 95, 220, 35
-    AUTORADIOBUTTON "&Normal", 4005, 20, 108, 80, 12
-    AUTORADIOBUTTON "&Squared", 4006, 110, 108, 80, 12
+    // Scoring mode - better internal spacing
+    GROUPBOX "Scoring mode", -1, 10, 102, 220, 38
+    AUTORADIOBUTTON "&Normal", 4005, 20, 116, 80, 12, WS_GROUP
+    AUTORADIOBUTTON "&Squared", 4006, 110, 116, 80, 12
 
-    AUTOCHECKBOX "Confirm on e&xit", 4007, 10, 140, 100, 12
-    AUTOCHECKBOX "&Hard score", 4008, 10, 155, 100, 12
-    AUTOCHECKBOX "&Show opponent cards", 4009, 10, 170, 100, 12
-    AUTOCHECKBOX "C&lassic layout", 4011, 120, 140, 100, 12
+    // Checkboxes - consistent 16px vertical spacing
+    AUTOCHECKBOX "Confirm on e&xit", 4007, 10, 150, 100, 12
+    AUTOCHECKBOX "&Hard score", 4008, 10, 166, 100, 12
+    AUTOCHECKBOX "&Show opponent cards", 4009, 10, 182, 100, 12
+    AUTOCHECKBOX "C&lassic layout", 4011, 120, 150, 100, 12
 
-    DEFPUSHBUTTON "OK", IDOK, 70, 185, 50, 14
-    PUSHBUTTON "Cancel", IDCANCEL, 130, 185, 50, 14
+    // Buttons - adequate margins (12px from last checkbox text, 16px bottom margin)
+    DEFPUSHBUTTON "OK", IDOK, 70, 194, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 130, 194, 50, 14
 END
 
 3003 DIALOGEX 0, 0, 300, 220
@@ -122,4 +140,30 @@ BEGIN
     EDITTEXT 5001, 10, 25, 200, 14, ES_AUTOHSCROLL
     DEFPUSHBUTTON "OK", IDOK, 60, 55, 50, 14
     PUSHBUTTON "Cancel", IDCANCEL, 120, 55, 50, 14
+END
+
+3006 DIALOG 25, 20, 200, 100
+STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
+CAPTION "Random things"
+FONT 8, "MS Sans Serif"
+BEGIN
+    GROUPBOX "Settings", -1, 8, 6, 184, 56
+
+    LTEXT "Multiplier (1-20):", -1, 16, 18, 70, 8
+    CONTROL "", 660, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 90, 16, 75, 12
+    LTEXT "6", 663, 170, 18, 20, 8
+
+    LTEXT "Number of (1-4):", -1, 16, 32, 70, 8
+    CONTROL "", 661, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 90, 30, 75, 12
+    LTEXT "4", 664, 170, 32, 20, 8
+
+    LTEXT "Time interval (ms):", -1, 16, 46, 70, 8
+    CONTROL "", 662, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 90, 44, 75, 12
+    LTEXT "200", 665, 170, 46, 20, 8
+
+    AUTOCHECKBOX "They &exist", 666, 16, 68, 70, 10
+    AUTOCHECKBOX "Icon &twirl on", 667, 100, 68, 70, 10
+
+    DEFPUSHBUTTON "OK", IDOK, 56, 82, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 112, 82, 50, 14
 END

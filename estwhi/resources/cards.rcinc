@@ -57,3 +57,7 @@ CLUB BITMAP "../assets/cards/small/club.bmp"
 DIAMOND BITMAP "../assets/cards/small/diamond.bmp"
 HEART BITMAP "../assets/cards/small/heart.bmp"
 SPADE BITMAP "../assets/cards/small/spade.bmp"
+
+// Logos (31x31)
+MD_LOGO BITMAP "../assets/cards/small/small_31x31_005.bmp"
+IC_LOGO BITMAP "../assets/cards/small/small_31x31_006.bmp"
