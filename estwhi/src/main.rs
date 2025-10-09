@@ -11,8 +11,8 @@ use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
     CreateCompatibleDC as CreateCDC, CreateSolidBrush, DeleteDC, DeleteDC as DeleteDc,
     DeleteObject, EndPaint, FillRect, GetSysColor, SelectObject, SelectObject as SelectObj,
-    SetBkMode, SetTextColor, TextOutW, COLOR_BTNFACE, COLOR_WINDOWTEXT, HBITMAP, HBRUSH, HDC,
-    NOTSRCCOPY, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    SetBkMode, SetTextColor, TextOutW, COLOR_WINDOWTEXT, HBITMAP, HBRUSH, HDC, NOTSRCCOPY,
+    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
 
 use windows::Win32::Graphics::Gdi::{GetObjectW, SetStretchBltMode, StretchBlt, BITMAP, HALFTONE};
@@ -44,10 +44,7 @@ use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 
 use windows::Win32::UI::HiDpi::GetDpiForWindow;
 
-use windows::Win32::UI::Controls::{
-    InitCommonControls, UDM_SETBUDDY, UDM_SETRANGE32, UDS_ALIGNRIGHT, UDS_ARROWKEYS, UDS_AUTOBUDDY,
-    UDS_SETBUDDYINT,
-};
+use windows::Win32::UI::Controls::InitCommonControls;
 
 use std::ffi::c_void;
 
@@ -72,6 +69,10 @@ const fn make_int_resource(id: u16) -> PCWSTR {
 #[inline]
 const fn loword(val: u32) -> u16 {
     (val & 0xffff) as u16
+}
+
+const fn hiword(val: u32) -> u16 {
+    ((val >> 16) & 0xffff) as u16
 }
 
 const BST_CHECKED_U: usize = 1;
@@ -1139,16 +1140,14 @@ fn main() -> windows::core::Result<()> {
                 app.config.cheat_cards
             };
 
-            if should_create {
-                if let Err(_) = create_cheat_cards_window(hwnd) {
-                    MessageBoxW(
-                        hwnd,
-                        PCWSTR(wide("Could not create cheat cards window!").as_ptr()),
-                        PCWSTR(wide("Error").as_ptr()),
-                        MB_ICONHAND | MB_OK,
-                    );
-                    app_state().lock().unwrap().config.cheat_cards = false;
-                }
+            if should_create && create_cheat_cards_window(hwnd).is_err() {
+                MessageBoxW(
+                    hwnd,
+                    PCWSTR(wide("Could not create cheat cards window!").as_ptr()),
+                    PCWSTR(wide("Error").as_ptr()),
+                    MB_ICONHAND | MB_OK,
+                );
+                app_state().lock().unwrap().config.cheat_cards = false;
             }
         }
 
@@ -1217,7 +1216,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         if old_cheat_flag != new_cheat_flag {
                             if new_cheat_flag {
                                 // Create cheat window
-                                if let Err(_) = create_cheat_cards_window(hwnd) {
+                                if create_cheat_cards_window(hwnd).is_err() {
                                     MessageBoxW(
                                         hwnd,
                                         PCWSTR(
@@ -2905,14 +2904,14 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
     let scale = dpi / 96.0;
 
     let mut rect = RECT::default();
-    GetClientRect(hwnd, &mut rect);
+    let _ = GetClientRect(hwnd, &mut rect);
 
     let green_brush = CreateSolidBrush(COLORREF(128 << 8));
     FillRect(hdc, &rect, green_brush);
-    DeleteObject(green_brush);
+    let _ = DeleteObject(green_brush);
 
     if num_players < 2 {
-        EndPaint(hwnd, &ps);
+        let _ = EndPaint(hwnd, &ps);
         return;
     }
 
@@ -2932,7 +2931,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
     };
 
     if no_cards == 0 {
-        EndPaint(hwnd, &ps);
+        let _ = EndPaint(hwnd, &ps);
         return;
     }
 
@@ -2956,6 +2955,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, COLORREF(GetSysColor(COLOR_WINDOWTEXT)));
 
+    #[allow(clippy::needless_range_loop)]
     for player_idx in 1..num_players {
         let player_number = player_idx + 1;
         let row_index = player_idx - 1;
@@ -2965,7 +2965,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
 
         let player_text = player_number.to_string();
         let player_wide = wide(&player_text);
-        TextOutW(
+        let _ = TextOutW(
             hdc,
             (10.0 * scale).round() as i32,
             text_y,
@@ -2991,7 +2991,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
         }
     }
 
-    EndPaint(hwnd, &ps);
+    let _ = EndPaint(hwnd, &ps);
 }
 
 unsafe fn draw_card_scaled(
@@ -3025,7 +3025,7 @@ unsafe fn draw_card_scaled(
     );
 
     SelectObject(memdc, old_bmp);
-    DeleteDC(memdc);
+    let _ = DeleteDC(memdc);
 }
 
 unsafe fn update_cheat_cards_window() {
@@ -3036,7 +3036,7 @@ unsafe fn update_cheat_cards_window() {
 
     if let Some(hwnd_raw) = hwnd_opt {
         let hwnd = HWND(hwnd_raw as *mut _);
-        InvalidateRect(hwnd, None, BOOL(1));
+        let _ = InvalidateRect(hwnd, None, BOOL(1));
     }
 }
 
@@ -3064,7 +3064,7 @@ unsafe fn cleanup_cheat_window() {
             }
         }
 
-        DestroyWindow(hwnd);
+        let _ = DestroyWindow(hwnd);
     }
 
     {
@@ -3243,91 +3243,52 @@ extern "system" fn about_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam:
     }
 }
 
-extern "system" fn options_dlg_proc(
-    hwnd: HWND,
-    msg: u32,
-    wparam: WPARAM,
-    _lparam: LPARAM,
-) -> isize {
+// Calculate maximum cards allowed based on number of players
+// Standard deck has 52 cards, so max cards = floor(52 / num_players)
+// But never exceed 15 cards per player
+fn calc_max_cards_for_players(num_players: u32) -> u32 {
+    let max_from_deck = 52 / num_players;
+    max_from_deck.min(15)
+}
+
+extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     unsafe {
         match msg {
             WM_INITDIALOG => {
                 // Populate from current config
-
                 let cfg = app_state().lock().unwrap().config.clone();
 
-                // Numbers
-
-                let _ = SetDlgItemInt(hwnd, 4001, cfg.num_players, false);
-
-                let _ = SetDlgItemInt(hwnd, 4002, cfg.max_cards, false);
-
-                // Create UpDown (spin) controls for both edits
-
-                let _dpi = GetDpiForWindow(hwnd) as i32;
-
-                let hinst = GetModuleHandleW(None).unwrap();
-
-                // Players spin
-
-                let bud1 = GetDlgItem(hwnd, 4001).unwrap();
-
-                let _rc1 = RECT {
-                    left: 0,
-                    top: 0,
-                    right: 0,
-                    bottom: 0,
-                };
-
-                let ud1 = CreateWindowExW(
-                    WINDOW_EX_STYLE::default(),
-                    PCWSTR(wide("msctls_updown32").as_ptr()),
-                    PCWSTR(wide("").as_ptr()),
-                    WINDOW_STYLE(
-                        (WS_CHILD | WS_VISIBLE).0
-                            | (UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS),
-                    ),
-                    0,
-                    0,
-                    0,
-                    0,
+                // Initialize scrollbar for number of players (2-6)
+                SendDlgItemMessageW(hwnd, 4001, SBM_SETRANGE, WPARAM(2), LPARAM(6));
+                SendDlgItemMessageW(
                     hwnd,
-                    HMENU(5001isize as _),
-                    hinst,
-                    None,
-                )
-                .unwrap();
+                    4001,
+                    SBM_SETPOS,
+                    WPARAM(cfg.num_players as usize),
+                    LPARAM(1),
+                );
 
-                let _ = SendMessageW(ud1, UDM_SETBUDDY, WPARAM(bud1.0 as usize), LPARAM(0));
+                // Update players value label
+                let players_str = format!("{}\0", cfg.num_players);
+                let _ = SetDlgItemTextW(hwnd, 4010, PCWSTR(wide(&players_str).as_ptr()));
 
-                let _ = SendMessageW(ud1, UDM_SETRANGE32, WPARAM(2), LPARAM(6));
+                // Initialize scrollbar for max cards (always 1-15, fixed range)
+                SendDlgItemMessageW(hwnd, 4002, SBM_SETRANGE, WPARAM(1), LPARAM(15));
 
-                // Max cards spin
-
-                let bud2 = GetDlgItem(hwnd, 4002).unwrap();
-
-                let ud2 = CreateWindowExW(
-                    WINDOW_EX_STYLE::default(),
-                    PCWSTR(wide("msctls_updown32").as_ptr()),
-                    PCWSTR(wide("").as_ptr()),
-                    WINDOW_STYLE(
-                        (WS_CHILD | WS_VISIBLE).0
-                            | (UDS_SETBUDDYINT | UDS_ALIGNRIGHT | UDS_AUTOBUDDY | UDS_ARROWKEYS),
-                    ),
-                    0,
-                    0,
-                    0,
-                    0,
+                // Clamp current max cards to what's allowed for current player count
+                let max_allowed = calc_max_cards_for_players(cfg.num_players);
+                let max_cards = cfg.max_cards.min(max_allowed);
+                SendDlgItemMessageW(
                     hwnd,
-                    HMENU(5002isize as _),
-                    hinst,
-                    None,
-                )
-                .unwrap();
+                    4002,
+                    SBM_SETPOS,
+                    WPARAM(max_cards as usize),
+                    LPARAM(1),
+                );
 
-                let _ = SendMessageW(ud2, UDM_SETBUDDY, WPARAM(bud2.0 as usize), LPARAM(0));
-
-                let _ = SendMessageW(ud2, UDM_SETRANGE32, WPARAM(1), LPARAM(15));
+                // Update max cards value label
+                let cards_str = format!("{}\0", max_cards);
+                let _ = SetDlgItemTextW(hwnd, 4012, PCWSTR(wide(&cards_str).as_ptr()));
 
                 // Radios
 
@@ -3408,23 +3369,127 @@ extern "system" fn options_dlg_proc(
                 return 1;
             }
 
+            WM_HSCROLL => {
+                // Handle scrollbar changes
+                let hwnd_scrollbar = HWND(lparam.0 as _);
+                let scroll_code = loword(wparam.0 as u32) as i32;
+
+                // Determine which scrollbar was moved
+                let sb_players = GetDlgItem(hwnd, 4001).unwrap();
+                let sb_cards = GetDlgItem(hwnd, 4002).unwrap();
+
+                if hwnd_scrollbar == sb_players {
+                    // Players scrollbar changed
+                    let cur_pos =
+                        SendMessageW(hwnd_scrollbar, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+                    let mut new_pos = cur_pos;
+
+                    // Update position based on scroll action
+                    if scroll_code == SB_LINEUP.0 || scroll_code == SB_LINELEFT.0 {
+                        new_pos -= 1;
+                    } else if scroll_code == SB_LINEDOWN.0 || scroll_code == SB_LINERIGHT.0 {
+                        new_pos += 1;
+                    } else if scroll_code == SB_PAGEUP.0 || scroll_code == SB_PAGELEFT.0 {
+                        new_pos -= 1;
+                    } else if scroll_code == SB_PAGEDOWN.0 || scroll_code == SB_PAGERIGHT.0 {
+                        new_pos += 1;
+                    } else if scroll_code == SB_THUMBTRACK.0 || scroll_code == SB_THUMBPOSITION.0 {
+                        new_pos = hiword(wparam.0 as u32) as i32;
+                    } else {
+                        return 0;
+                    }
+
+                    // Clamp to range [2, 6]
+                    new_pos = new_pos.clamp(2, 6);
+
+                    if new_pos != cur_pos {
+                        SendMessageW(
+                            hwnd_scrollbar,
+                            SBM_SETPOS,
+                            WPARAM(new_pos as usize),
+                            LPARAM(1),
+                        );
+
+                        // Update value label
+                        let players_str = format!("{}\0", new_pos);
+                        let _ = SetDlgItemTextW(hwnd, 4010, PCWSTR(wide(&players_str).as_ptr()));
+
+                        // Clamp max cards position if it exceeds the new limit
+                        let max_allowed = calc_max_cards_for_players(new_pos as u32);
+                        let cur_cards =
+                            SendDlgItemMessageW(hwnd, 4002, SBM_GETPOS, WPARAM(0), LPARAM(0)).0
+                                as u32;
+
+                        if cur_cards > max_allowed {
+                            // Clamp to new maximum
+                            SendDlgItemMessageW(
+                                hwnd,
+                                4002,
+                                SBM_SETPOS,
+                                WPARAM(max_allowed as usize),
+                                LPARAM(1),
+                            );
+
+                            // Update max cards value label
+                            let cards_str = format!("{}\0", max_allowed);
+                            let _ = SetDlgItemTextW(hwnd, 4012, PCWSTR(wide(&cards_str).as_ptr()));
+                        }
+                    }
+                } else if hwnd_scrollbar == sb_cards {
+                    // Max cards scrollbar changed
+                    let cur_pos =
+                        SendMessageW(hwnd_scrollbar, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
+                    let mut new_pos = cur_pos;
+
+                    // Update position based on scroll action
+                    if scroll_code == SB_LINEUP.0 || scroll_code == SB_LINELEFT.0 {
+                        new_pos -= 1;
+                    } else if scroll_code == SB_LINEDOWN.0 || scroll_code == SB_LINERIGHT.0 {
+                        new_pos += 1;
+                    } else if scroll_code == SB_PAGEUP.0 || scroll_code == SB_PAGELEFT.0 {
+                        new_pos -= 1;
+                    } else if scroll_code == SB_PAGEDOWN.0 || scroll_code == SB_PAGERIGHT.0 {
+                        new_pos += 1;
+                    } else if scroll_code == SB_THUMBTRACK.0 || scroll_code == SB_THUMBPOSITION.0 {
+                        new_pos = hiword(wparam.0 as u32) as i32;
+                    } else {
+                        return 0;
+                    }
+
+                    // Get current range based on players
+                    let num_players =
+                        SendDlgItemMessageW(hwnd, 4001, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as u32;
+                    let max_allowed = calc_max_cards_for_players(num_players);
+
+                    // Clamp to range [1, max_allowed]
+                    new_pos = new_pos.max(1).min(max_allowed as i32);
+
+                    if new_pos != cur_pos {
+                        SendMessageW(
+                            hwnd_scrollbar,
+                            SBM_SETPOS,
+                            WPARAM(new_pos as usize),
+                            LPARAM(1),
+                        );
+
+                        // Update value label
+                        let cards_str = format!("{}\0", new_pos);
+                        let _ = SetDlgItemTextW(hwnd, 4012, PCWSTR(wide(&cards_str).as_ptr()));
+                    }
+                }
+
+                return 0;
+            }
+
             WM_COMMAND => {
                 let id = loword(wparam.0 as u32);
 
                 if id == 1 {
-                    // OK
-
-                    // Read back values
-
-                    let mut trans = BOOL(0);
-
-                    let np = GetDlgItemInt(hwnd, 4001, Some(&mut trans), false);
-
-                    let num_players = if trans.as_bool() { np.clamp(2, 6) } else { 4 };
-
-                    let mc = GetDlgItemInt(hwnd, 4002, Some(&mut trans), false);
-
-                    let max_cards = if trans.as_bool() { mc.clamp(1, 15) } else { 13 };
+                    // OK - Read values from scrollbars
+                    let num_players =
+                        SendDlgItemMessageW(hwnd, 4001, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as u32;
+                    let max_cards =
+                        SendDlgItemMessageW(hwnd, 4002, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as u32;
 
                     let next_notify =
                         if SendDlgItemMessageW(hwnd, 4003, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
