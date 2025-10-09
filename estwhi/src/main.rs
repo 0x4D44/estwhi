@@ -1406,7 +1406,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                         draw_trick(memdc, &trick_rc, scale);
                     }
                 } else {
-                    // No game: Just green background with IC_LOGO (for random things)
+                    // No game: Just green background with IC_LOGO and random things
                     FillRect(memdc, &rc, green);
 
                     // Draw IC_LOGO at fixed position (matching original at 285, 80)
@@ -1426,6 +1426,34 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                             31,
                             31,
                         );
+                    }
+
+                    // Draw random things at their current positions
+                    let app = app_state().lock().unwrap();
+                    for thing in &app.random_things.things {
+                        let name = match thing.bitmap_index {
+                            0 => "CLUB",
+                            1 => "DIAMOND",
+                            2 => "SPADE",
+                            _ => "HEART",
+                        };
+                        if let Ok(obj) = LoadImageW(
+                            GetModuleHandleW(None).unwrap(),
+                            PCWSTR(wide(name).as_ptr()),
+                            IMAGE_BITMAP,
+                            0,
+                            0,
+                            LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
+                        ) {
+                            blit_bitmap(
+                                memdc,
+                                HBITMAP(obj.0),
+                                thing.x,
+                                thing.y,
+                                THING_SIZE,
+                                THING_SIZE,
+                            );
+                        }
                     }
                 }
 
