@@ -3598,18 +3598,23 @@ extern "system" fn scores_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam
     unsafe {
         match msg {
             WM_INITDIALOG => {
-                // Populate fixed lines 4100..4109
+                // Populate name controls (601-610) and score controls (611-620)
+                // matching Pascal implementation with 20 separate controls
 
                 let hs = load_high_scores();
 
+                // Populate name controls (601-610)
+                // Truncate names to 15 characters to prevent wrapping/clipping
                 for i in 0..10u32 {
-                    let name = &hs.names[i as usize];
+                    let name: String = hs.names[i as usize].chars().take(15).collect();
+                    let name_wide = wide(&name);
+                    let _ = SetDlgItemTextW(hwnd, 601 + i as i32, PCWSTR(name_wide.as_ptr()));
+                }
 
-                    let val = hs.values[i as usize];
-
-                    let line = wide(&format!("{:<20} {:>6}", name, val));
-
-                    let _ = SetDlgItemTextW(hwnd, 4100 + i as i32, PCWSTR(line.as_ptr()));
+                // Populate score controls (611-620)
+                for i in 0..10u32 {
+                    let score = wide(&format!("{}", hs.values[i as usize]));
+                    let _ = SetDlgItemTextW(hwnd, 611 + i as i32, PCWSTR(score.as_ptr()));
                 }
 
                 return 1;
@@ -3968,7 +3973,8 @@ fn maybe_update_high_scores(hwnd: HWND, player_score: u32) {
         }
 
         hs.values[pos] = player_score;
-        hs.names[pos] = name;
+        // Truncate name to 15 characters (matching Pascal STRING[15])
+        hs.names[pos] = name.chars().take(15).collect();
 
         save_high_scores(&hs);
     }
@@ -3995,7 +4001,18 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
     ) -> isize {
         unsafe {
             match msg {
-                WM_INITDIALOG => return 1,
+                WM_INITDIALOG => {
+                    // Limit name to 15 characters (matching Pascal STRING[15])
+                    const EM_LIMITTEXT: u32 = 0x00C5;
+                    let _ = SendDlgItemMessageW(
+                        hwnd,
+                        IDC_NAME_EDIT,
+                        EM_LIMITTEXT,
+                        WPARAM(15),
+                        LPARAM(0),
+                    );
+                    return 1;
+                }
 
                 WM_COMMAND => {
                     let id = loword(wparam.0 as u32);
