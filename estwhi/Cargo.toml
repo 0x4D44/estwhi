@@ -28,6 +28,7 @@ embed-resource = "2"
 FileDescription = "Estimation Whist"
 ProductName = "Estimation Whist"
 OriginalFilename = "estwhi.exe"
+Icon = "resources/app.ico"
 
 [features]
 no-res = []

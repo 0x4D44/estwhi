@@ -11,6 +11,7 @@ fn main() {
 
     println!("cargo:rerun-if-changed=resources/app.rc");
     println!("cargo:rerun-if-changed=resources/cards.rcinc");
+    println!("cargo:rerun-if-changed=resources/app.ico");
     println!("cargo:rerun-if-changed=assets");
 
     // Only attempt resource compilation when targeting Windows

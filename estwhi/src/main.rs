@@ -99,7 +99,7 @@ const SMALL_MIN_WIDTH_BASE: f32 = 25.0;
 
 // Hand row absolute layout
 
-const HAND_Y: i32 = 234; // top-left Y for hand cards
+const HAND_Y: i32 = 228; // top-left Y for hand cards
 
 const HAND_X0: i32 = 10; // leftmost X for first hand card
 
@@ -935,12 +935,28 @@ fn main() -> windows::core::Result<()> {
 
         let hinstance = GetModuleHandleW(None)?;
 
+        // Load application icon from resources (ID = 1)
+        // Use LoadImageW for better compatibility with custom icons
+        let hicon = LoadImageW(
+            hinstance,
+            make_int_resource(1),
+            IMAGE_ICON,
+            0,
+            0,
+            LR_DEFAULTSIZE | LR_SHARED,
+        )
+        .ok()
+        .map(|h| HICON(h.0))
+        .unwrap_or_default();
+
         let wc = WNDCLASSW {
             style: CS_HREDRAW | CS_VREDRAW,
 
             lpfnWndProc: Some(wndproc),
 
             hInstance: hinstance.into(),
+
+            hIcon: hicon,
 
             hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
 
@@ -995,6 +1011,12 @@ fn main() -> windows::core::Result<()> {
             hinstance,
             None,
         )?;
+
+        // Set window icon explicitly
+        if !hicon.is_invalid() {
+            let _ = SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG as usize), LPARAM(hicon.0 as isize));
+            let _ = SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL as usize), LPARAM(hicon.0 as isize));
+        }
 
         // Load and attach menu from resources; if unavailable, create one in code
 

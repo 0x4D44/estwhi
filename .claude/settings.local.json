@@ -1,15 +1,7 @@
 {
   "permissions": {
     "allow": [
-      "Bash(cargo:*)",
-      "Bash(mkdir:*)",
-      "Bash(find:*)",
-      "WebSearch",
-      "WebFetch(domain:devblogs.microsoft.com)",
-      "Bash(pip install:*)",
-      "Bash(python:*)",
-      "Bash(python3:*)",
-      "Bash(dir:*)"
+      "Bash(powershell:*)"
     ],
     "deny": [],
     "ask": []
