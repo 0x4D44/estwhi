@@ -129,10 +129,10 @@ impl Deck {
 
 // ----- Scoring helpers -----
 
-/// Compute per-player score deltas for a completed hand, matching the legacy rules:
-/// - AvailableBonus = 10, except when `hard_score` and (sum(calls) < dealt_cards) and call == 0, then 0.
-/// - Vanilla: delta = tricks, plus AvailableBonus if call == tricks.
-/// - Squared: if call == tricks => AvailableBonus + tricks^2, else delta = tricks.
+/// Compute per-player score deltas for a completed hand:
+/// - AvailableBonus = 10 (or 0 if `hard_score` and sum(calls) < dealt_cards)
+/// - Vanilla: if call == tricks, score = tricks + AvailableBonus; else score = tricks
+/// - Squared: if call == tricks, score = AvailableBonus + tricks²; else score = tricks
 pub fn score_hand(
     score_mode: ScoreMode,
     hard_score: bool,
@@ -146,12 +146,9 @@ pub fn score_hand(
     for i in 0..n {
         let call = calls[i];
         let t = tricks[i];
-        // Port rule: matching a zero bid never earns the 10 bonus.
-        // Additionally, legacy "hard score" removed the bonus for zero bids when
-        // the table under-called the hand (sum(calls) < dealt_cards). Since zero
-        // bids never get a bonus here, the hard-score condition is redundant but
-        // we keep the structure for clarity in case of future rule tweaks.
-        let available_bonus = if call == 0 || (hard_score && total_calls < dealt_cards) {
+        // Matching any bid (including zero) earns the 10 bonus.
+        // Legacy "hard score" mode removed the bonus when the table under-called.
+        let available_bonus = if hard_score && total_calls < dealt_cards {
             0
         } else {
             10
@@ -279,20 +276,20 @@ mod tests {
 
     #[test]
     fn scoring_vanilla_soft() {
-        // calls sum == dealt -> zero calls still get 10 bonus if matched
+        // Zero calls get 10 bonus when matched
         let calls = vec![1, 0, 0, 0];
         let tricks = vec![1, 0, 0, 0];
         let d = score_hand(ScoreMode::Vanilla, false, &calls, &tricks, 1);
-        assert_eq!(d, vec![11, 0, 0, 0]);
+        assert_eq!(d, vec![11, 10, 10, 10]);
     }
 
     #[test]
     fn scoring_vanilla_hard_zero_bid_penalty() {
-        // total calls < dealt and a player called 0 -> that player gets no 10 bonus even if matched
+        // In hard_score mode when table under-calls, nobody gets bonus
         let calls = vec![0, 0, 0, 0];
         let tricks = vec![0, 0, 0, 0];
         let d = score_hand(ScoreMode::Vanilla, true, &calls, &tricks, 1);
-        assert_eq!(d, vec![0, 0, 0, 0]);
+        assert_eq!(d, vec![0, 0, 0, 0]); // total_calls(0) < dealt_cards(1), so no bonus
     }
 
     #[test]
@@ -300,7 +297,7 @@ mod tests {
         let calls = vec![2, 0, 0, 0];
         let tricks = vec![2, 0, 0, 0];
         let d = score_hand(ScoreMode::Squared, false, &calls, &tricks, 2);
-        assert_eq!(d, vec![14, 0, 0, 0]); // 10 + 2^2
+        assert_eq!(d, vec![14, 10, 10, 10]); // 10 + 2^2 for player 0; 10 + 0^2 for others
     }
 
     #[test]
@@ -308,7 +305,7 @@ mod tests {
         let calls = vec![2, 0, 0, 0];
         let tricks = vec![1, 0, 0, 0];
         let d = score_hand(ScoreMode::Squared, false, &calls, &tricks, 2);
-        assert_eq!(d, vec![1, 0, 0, 0]);
+        assert_eq!(d, vec![1, 10, 10, 10]); // Player 0 missed → 1; others made 0 bid → 10 each
     }
 
     #[test]

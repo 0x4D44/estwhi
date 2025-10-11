@@ -372,8 +372,6 @@ fn load_config_from_registry() -> UiConfig {
 
     let ch = registry::get_u32("CheatCards", 0);
 
-    let cl = registry::get_u32("ClassicLayout", 1);
-
     cfg.num_players = np.clamp(2, 6);
 
     cfg.max_cards = mc.clamp(1, 15);
@@ -393,8 +391,6 @@ fn load_config_from_registry() -> UiConfig {
     cfg.confirm_exit = ce != 0;
 
     cfg.cheat_cards = ch != 0;
-
-    cfg.classic_layout = cl != 0;
 
     cfg
 }
@@ -423,8 +419,6 @@ fn save_config_to_registry(cfg: &UiConfig) {
     let _ = registry::set_u32("ConfirmExit", if cfg.confirm_exit { 1 } else { 0 });
 
     let _ = registry::set_u32("CheatCards", if cfg.cheat_cards { 1 } else { 0 });
-
-    let _ = registry::set_u32("ClassicLayout", if cfg.classic_layout { 1 } else { 0 });
 }
 
 fn load_cheat_window_state() -> CheatWindowState {
@@ -783,6 +777,8 @@ fn start_deal(hwnd: HWND) {
     let total_rounds = (max * 2).saturating_sub(1);
 
     if app.game.round_no > total_rounds {
+        // Completed all rounds - start new game with reset scores
+        app.game.scores = vec![0; n];
         app.game.round_no = 1;
     }
 
@@ -1366,12 +1362,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     draw_info_panel(memdc, &info_rc, scale);
                     FillRect(memdc, &hand_rc, green);
 
-                    let classic = app_state().lock().unwrap().config.classic_layout;
-                    if classic {
-                        draw_hand_classic(memdc);
-                    } else {
-                        draw_hand(memdc, &hand_rc, scale);
-                    }
+                    // Always use classic layout for retro feel
+                    draw_hand_classic(memdc);
 
                     let pb_rc = RECT {
                         left: (20.0 * scale).round() as i32,
@@ -1412,17 +1404,8 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     draw_bevel_box(memdc, other_rc);
                     draw_extra_info(memdc, &other_rc, scale);
 
-                    if classic {
-                        draw_trick_classic(memdc);
-                    } else {
-                        let trick_rc = RECT {
-                            left: 0,
-                            top: 0,
-                            right: info_left,
-                            bottom: info_rc.bottom,
-                        };
-                        draw_trick(memdc, &trick_rc, scale);
-                    }
+                    // Always use classic layout for retro feel
+                    draw_trick_classic(memdc);
                 } else {
                     // No game: Just green background with IC_LOGO and random things
                     FillRect(memdc, &rc, green);
@@ -1831,6 +1814,40 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
         set_status("");
 
         if final_round {
+            // Redraw the screen with updated scores BEFORE showing the message box
+            // (matching Pascal code: DrawInformation then MessageBox)
+            request_redraw(hwnd);
+            unsafe {
+                UpdateWindow(hwnd);
+            }
+
+            // Show end-of-game message (like original Pascal code)
+            let message = if human_best >= best_score {
+                wide("Well done! - You've won!")
+            } else {
+                // Find which player won
+                let app = app_state().lock().unwrap();
+                let winner = app
+                    .game
+                    .scores
+                    .iter()
+                    .enumerate()
+                    .max_by_key(|(_, &score)| score)
+                    .map(|(idx, _)| idx + 1)
+                    .unwrap_or(1);
+                drop(app);
+                wide(&format!("Game won by player {}", winner))
+            };
+
+            unsafe {
+                MessageBoxW(
+                    hwnd,
+                    PCWSTR(message.as_ptr()),
+                    PCWSTR(wide("Estimation Whist").as_ptr()),
+                    MB_ICONINFORMATION | MB_OK,
+                );
+            }
+
             if human_best >= best_score {
                 maybe_update_high_scores(hwnd, human_best);
             }
@@ -2899,6 +2916,8 @@ unsafe extern "system" fn cheat_window_proc(
         }
 
         WM_CLOSE => {
+            // User explicitly closed the window - disable the option
+            app_state().lock().unwrap().config.cheat_cards = false;
             let _ = DestroyWindow(hwnd);
             return LRESULT(0);
         }
@@ -2920,7 +2939,6 @@ unsafe extern "system" fn cheat_window_proc(
             }
 
             let mut app = app_state().lock().unwrap();
-            app.config.cheat_cards = false;
             app.cheat_window.hwnd = None;
 
             return LRESULT(0);
@@ -3386,18 +3404,6 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                     LPARAM(0),
                 );
 
-                let _ = SendDlgItemMessageW(
-                    hwnd,
-                    4011,
-                    BM_SETCHECK,
-                    WPARAM(if cfg.classic_layout {
-                        BST_CHECKED_U
-                    } else {
-                        BST_UNCHECKED_U
-                    }),
-                    LPARAM(0),
-                );
-
                 return 1;
             }
 
@@ -3553,11 +3559,6 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                             as usize
                             == BST_CHECKED_U;
 
-                    let classic_layout =
-                        SendDlgItemMessageW(hwnd, 4011, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
-                            as usize
-                            == BST_CHECKED_U;
-
                     let mut state = app_state().lock().unwrap();
 
                     state.config = UiConfig {
@@ -3567,7 +3568,6 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                         next_notify,
                         confirm_exit,
                         cheat_cards,
-                        classic_layout,
                     };
 
                     drop(state);
