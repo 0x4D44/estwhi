@@ -163,11 +163,7 @@ struct UiConfig {
 
     confirm_exit: bool,
 
-    hard_score: bool,
-
     cheat_cards: bool,
-
-    classic_layout: bool,
 }
 
 impl Default for UiConfig {
@@ -183,11 +179,7 @@ impl Default for UiConfig {
 
             confirm_exit: true,
 
-            hard_score: false,
-
             cheat_cards: false,
-
-            classic_layout: true,
         }
     }
 }
@@ -378,8 +370,6 @@ fn load_config_from_registry() -> UiConfig {
 
     let ce = registry::get_u32("ConfirmExit", 1);
 
-    let hs = registry::get_u32("HardScore", 0);
-
     let ch = registry::get_u32("CheatCards", 0);
 
     let cl = registry::get_u32("ClassicLayout", 1);
@@ -401,8 +391,6 @@ fn load_config_from_registry() -> UiConfig {
     };
 
     cfg.confirm_exit = ce != 0;
-
-    cfg.hard_score = hs != 0;
 
     cfg.cheat_cards = ch != 0;
 
@@ -433,8 +421,6 @@ fn save_config_to_registry(cfg: &UiConfig) {
     );
 
     let _ = registry::set_u32("ConfirmExit", if cfg.confirm_exit { 1 } else { 0 });
-
-    let _ = registry::set_u32("HardScore", if cfg.hard_score { 1 } else { 0 });
 
     let _ = registry::set_u32("CheatCards", if cfg.cheat_cards { 1 } else { 0 });
 
@@ -1014,8 +1000,18 @@ fn main() -> windows::core::Result<()> {
 
         // Set window icon explicitly
         if !hicon.is_invalid() {
-            let _ = SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_BIG as usize), LPARAM(hicon.0 as isize));
-            let _ = SendMessageW(hwnd, WM_SETICON, WPARAM(ICON_SMALL as usize), LPARAM(hicon.0 as isize));
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                WPARAM(ICON_BIG as usize),
+                LPARAM(hicon.0 as isize),
+            );
+            let _ = SendMessageW(
+                hwnd,
+                WM_SETICON,
+                WPARAM(ICON_SMALL as usize),
+                LPARAM(hicon.0 as isize),
+            );
         }
 
         // Load and attach menu from resources; if unavailable, create one in code
@@ -1800,7 +1796,7 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
 
         let deltas = score_hand(
             app.config.score_mode,
-            app.config.hard_score,
+            false, // hard_score removed from options, keep as false for compatibility
             &app.game.calls,
             &app.game.tricks,
             app.game.dealt_cards,
@@ -1832,18 +1828,16 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
 
         drop(app);
 
-        // Restart random things when game ends
-        if final_round {
-            unsafe {
-                start_random_things(hwnd);
-            }
-        }
-
         set_status("");
 
         if final_round {
             if human_best >= best_score {
                 maybe_update_high_scores(hwnd, human_best);
+            }
+
+            // Start random things AFTER high score entry is complete
+            unsafe {
+                start_random_things(hwnd);
             }
 
             request_redraw(hwnd);
@@ -3382,18 +3376,6 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
 
                 let _ = SendDlgItemMessageW(
                     hwnd,
-                    4008,
-                    BM_SETCHECK,
-                    WPARAM(if cfg.hard_score {
-                        BST_CHECKED_U
-                    } else {
-                        BST_UNCHECKED_U
-                    }),
-                    LPARAM(0),
-                );
-
-                let _ = SendDlgItemMessageW(
-                    hwnd,
                     4009,
                     BM_SETCHECK,
                     WPARAM(if cfg.cheat_cards {
@@ -3566,11 +3548,6 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                             as usize
                             == BST_CHECKED_U;
 
-                    let hard_score =
-                        SendDlgItemMessageW(hwnd, 4008, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
-                            as usize
-                            == BST_CHECKED_U;
-
                     let cheat_cards =
                         SendDlgItemMessageW(hwnd, 4009, BM_GETCHECK, WPARAM(0), LPARAM(0)).0
                             as usize
@@ -3589,7 +3566,6 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                         score_mode,
                         next_notify,
                         confirm_exit,
-                        hard_score,
                         cheat_cards,
                         classic_layout,
                     };
