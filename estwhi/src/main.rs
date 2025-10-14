@@ -1805,10 +1805,6 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
             app.game.scores
         );
 
-        if final_round {
-            app.game.in_progress = false;
-        }
-
         drop(app);
 
         set_status("");
@@ -1816,9 +1812,11 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
         if final_round {
             // Redraw the screen with updated scores BEFORE showing the message box
             // (matching Pascal code: DrawInformation then MessageBox)
+            // IMPORTANT: Keep in_progress=true so WM_PAINT draws the game state
             request_redraw(hwnd);
             unsafe {
-                UpdateWindow(hwnd);
+                // Force immediate redraw by sending WM_PAINT directly
+                SendMessageW(hwnd, WM_PAINT, WPARAM(0), LPARAM(0));
             }
 
             // Show end-of-game message (like original Pascal code)
@@ -1847,6 +1845,9 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
                     MB_ICONINFORMATION | MB_OK,
                 );
             }
+
+            // NOW mark the game as not in progress (after user sees the final state)
+            app_state().lock().unwrap().game.in_progress = false;
 
             if human_best >= best_score {
                 maybe_update_high_scores(hwnd, human_best);
