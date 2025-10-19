@@ -13,6 +13,9 @@
 // Include card bitmaps
 #include "cards.rcinc"
 
+// Application icon
+1 ICON "app.ico"
+
 // Menu
 2000 MENU
 BEGIN
@@ -53,59 +56,77 @@ BEGIN
     CTEXT "Rust Edition", -1, 10, 50, 180, 12
 END
 
-3002 DIALOGEX 0, 0, 240, 224
+3002 DIALOGEX 0, 0, 230, 196
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Options"
 FONT 9, "Segoe UI"
 BEGIN
-    // Number of players - scrollbar with value label
-    LTEXT "Number of players (2-6):", -1, 10, 14, 100, 10
-    CONTROL "", 4001, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 115, 12, 85, 12
-    LTEXT "4", 4010, 205, 14, 25, 10
+    // Scrollbar controls - compact and aligned
+    LTEXT "Players (2-6):", -1, 12, 14, 68, 10
+    CONTROL "", 4001, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 85, 12, 120, 12
+    LTEXT "4", 4010, 210, 14, 14, 10
 
-    // Max cards - scrollbar with value label (range dynamically adjusted)
-    LTEXT "Max cards (1-15):", -1, 10, 34, 100, 10
-    CONTROL "", 4002, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 115, 32, 85, 12
-    LTEXT "13", 4012, 205, 34, 25, 10
+    LTEXT "Max cards:", -1, 12, 32, 68, 10
+    CONTROL "", 4002, "SCROLLBAR", SBS_HORZ | WS_CHILD | WS_VISIBLE | WS_TABSTOP, 85, 30, 120, 12
+    LTEXT "13", 4012, 210, 32, 14, 10
 
-    // Next card notification - better internal spacing
-    GROUPBOX "Next card notification", -1, 10, 56, 220, 38
-    AUTORADIOBUTTON "Show &dialog", 4003, 20, 70, 80, 12, WS_GROUP
-    AUTORADIOBUTTON "Wait for &mouse click", 4004, 110, 70, 110, 12
+    // Radio button groups - centered and symmetric
+    GROUPBOX "Next card notification", -1, 12, 52, 206, 34
+    AUTORADIOBUTTON "Show &dialog", 4003, 24, 66, 85, 12, WS_GROUP
+    AUTORADIOBUTTON "Wait for &mouse click", 4004, 115, 66, 95, 12
 
-    // Scoring mode - better internal spacing
-    GROUPBOX "Scoring mode", -1, 10, 102, 220, 38
-    AUTORADIOBUTTON "&Normal", 4005, 20, 116, 80, 12, WS_GROUP
-    AUTORADIOBUTTON "&Squared", 4006, 110, 116, 80, 12
+    GROUPBOX "Scoring mode", -1, 12, 92, 206, 34
+    AUTORADIOBUTTON "&Normal", 4005, 24, 106, 85, 12, WS_GROUP
+    AUTORADIOBUTTON "&Squared", 4006, 115, 106, 85, 12
 
-    // Checkboxes - consistent 16px vertical spacing
-    AUTOCHECKBOX "Confirm on e&xit", 4007, 10, 150, 100, 12
-    AUTOCHECKBOX "&Hard score", 4008, 10, 166, 100, 12
-    AUTOCHECKBOX "&Show opponent cards", 4009, 10, 182, 100, 12
-    AUTOCHECKBOX "C&lassic layout", 4011, 120, 150, 100, 12
+    // Checkboxes
+    AUTOCHECKBOX "Confirm on e&xit", 4007, 12, 136, 98, 12
+    AUTOCHECKBOX "&Show opponent cards", 4009, 12, 152, 98, 12
 
-    // Buttons - adequate margins (12px from last checkbox text, 16px bottom margin)
-    DEFPUSHBUTTON "OK", IDOK, 70, 194, 50, 14
-    PUSHBUTTON "Cancel", IDCANCEL, 130, 194, 50, 14
+    // Buttons - tighter spacing
+    DEFPUSHBUTTON "OK", IDOK, 62, 176, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 118, 176, 50, 14
 END
 
-3003 DIALOGEX 0, 0, 300, 220
+3003 DIALOGEX 0, 0, 230, 200
 STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "High Scores"
-FONT 9, "Segoe UI"
+FONT 8, "MS Sans Serif"
 BEGIN
-    LTEXT "Name                   Score", -1, 20, 10, 260, 10
-    LTEXT "", 4100, 20, 25, 260, 10
-    LTEXT "", 4101, 20, 40, 260, 10
-    LTEXT "", 4102, 20, 55, 260, 10
-    LTEXT "", 4103, 20, 70, 260, 10
-    LTEXT "", 4104, 20, 85, 260, 10
-    LTEXT "", 4105, 20, 100, 260, 10
-    LTEXT "", 4106, 20, 115, 260, 10
-    LTEXT "", 4107, 20, 130, 260, 10
-    LTEXT "", 4108, 20, 145, 260, 10
-    LTEXT "", 4109, 20, 160, 260, 10
-    DEFPUSHBUTTON "OK", IDOK, 125, 195, 50, 14
+    LTEXT "Name", -1, 20, 10, 120, 10
+    LTEXT "Score", -1, 150, 10, 60, 10, SS_RIGHT
+
+    LTEXT "", 601, 20, 25, 120, 10
+    LTEXT "", 611, 150, 25, 60, 10, SS_RIGHT
+
+    LTEXT "", 602, 20, 40, 120, 10
+    LTEXT "", 612, 150, 40, 60, 10, SS_RIGHT
+
+    LTEXT "", 603, 20, 55, 120, 10
+    LTEXT "", 613, 150, 55, 60, 10, SS_RIGHT
+
+    LTEXT "", 604, 20, 70, 120, 10
+    LTEXT "", 614, 150, 70, 60, 10, SS_RIGHT
+
+    LTEXT "", 605, 20, 85, 120, 10
+    LTEXT "", 615, 150, 85, 60, 10, SS_RIGHT
+
+    LTEXT "", 606, 20, 100, 120, 10
+    LTEXT "", 616, 150, 100, 60, 10, SS_RIGHT
+
+    LTEXT "", 607, 20, 115, 120, 10
+    LTEXT "", 617, 150, 115, 60, 10, SS_RIGHT
+
+    LTEXT "", 608, 20, 130, 120, 10
+    LTEXT "", 618, 150, 130, 60, 10, SS_RIGHT
+
+    LTEXT "", 609, 20, 145, 120, 10
+    LTEXT "", 619, 150, 145, 60, 10, SS_RIGHT
+
+    LTEXT "", 610, 20, 160, 120, 10
+    LTEXT "", 620, 150, 160, 60, 10, SS_RIGHT
+
+    DEFPUSHBUTTON "OK", IDOK, 90, 180, 50, 14
 END
 
 3004 DIALOG 14, 19, 74, 71
@@ -113,22 +134,22 @@ STYLE DS_MODALFRAME | WS_POPUP | WS_CAPTION | WS_SYSMENU
 CAPTION "Your call :-"
 FONT 8, "MS Sans Serif"
 BEGIN
-    PUSHBUTTON "&0", 400, 6, 6, 12, 12
-    PUSHBUTTON "&1", 401, 20, 6, 12, 12
-    PUSHBUTTON "&2", 402, 34, 6, 12, 12
-    PUSHBUTTON "&3", 403, 48, 6, 12, 12
-    PUSHBUTTON "&4", 404, 6, 20, 12, 12
-    PUSHBUTTON "&5", 405, 20, 20, 12, 12
-    PUSHBUTTON "&6", 406, 34, 20, 12, 12
-    PUSHBUTTON "&7", 407, 48, 20, 12, 12
-    PUSHBUTTON "&8", 408, 6, 34, 12, 12
-    PUSHBUTTON "&9", 409, 20, 34, 12, 12
-    PUSHBUTTON "1&0", 410, 34, 34, 12, 12
-    PUSHBUTTON "11", 411, 48, 34, 12, 12
-    PUSHBUTTON "12", 412, 6, 48, 12, 12
-    PUSHBUTTON "13", 413, 20, 48, 12, 12
-    PUSHBUTTON "14", 414, 34, 48, 12, 12
-    PUSHBUTTON "15", 415, 48, 48, 12, 12
+    PUSHBUTTON "&0", 400, 10, 6, 12, 12
+    PUSHBUTTON "&1", 401, 24, 6, 12, 12
+    PUSHBUTTON "&2", 402, 38, 6, 12, 12
+    PUSHBUTTON "&3", 403, 52, 6, 12, 12
+    PUSHBUTTON "&4", 404, 10, 20, 12, 12
+    PUSHBUTTON "&5", 405, 24, 20, 12, 12
+    PUSHBUTTON "&6", 406, 38, 20, 12, 12
+    PUSHBUTTON "&7", 407, 52, 20, 12, 12
+    PUSHBUTTON "&8", 408, 10, 34, 12, 12
+    PUSHBUTTON "&9", 409, 24, 34, 12, 12
+    PUSHBUTTON "1&0", 410, 38, 34, 12, 12
+    PUSHBUTTON "11", 411, 52, 34, 12, 12
+    PUSHBUTTON "12", 412, 10, 48, 12, 12
+    PUSHBUTTON "13", 413, 24, 48, 12, 12
+    PUSHBUTTON "14", 414, 38, 48, 12, 12
+    PUSHBUTTON "15", 415, 52, 48, 12, 12
 END
 
 3005 DIALOGEX 0, 0, 220, 80
@@ -164,6 +185,6 @@ BEGIN
     AUTOCHECKBOX "They &exist", 666, 16, 68, 70, 10
     AUTOCHECKBOX "Icon &twirl on", 667, 100, 68, 70, 10
 
-    DEFPUSHBUTTON "OK", IDOK, 56, 82, 50, 14
-    PUSHBUTTON "Cancel", IDCANCEL, 112, 82, 50, 14
+    DEFPUSHBUTTON "OK", IDOK, 47, 82, 50, 14
+    PUSHBUTTON "Cancel", IDCANCEL, 103, 82, 50, 14
 END
