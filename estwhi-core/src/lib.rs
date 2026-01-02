@@ -22,6 +22,10 @@
 
 use rand::Rng;
 
+pub mod ai;
+pub mod config;
+pub mod state;
+
 /// Card suit in a standard 52-card deck.
 ///
 /// Explicit discriminants match legacy card numbering scheme where:
@@ -542,5 +546,57 @@ mod tests {
         assert_eq!(h[1], 13); // C King
         assert_eq!(h[2], 1); // C Ace at end
         assert_eq!(h.last().copied(), Some(40)); // H Ace at end of hearts block
+    }
+
+    #[test]
+    fn invalid_card_ids() {
+        assert!(Card::from_legacy_id(0).is_none());
+        assert!(Card::from_legacy_id(53).is_none());
+        assert!(Card::from_legacy_id(255).is_none());
+    }
+
+    #[test]
+    fn deck_properties() {
+        let mut rng = rand::thread_rng();
+        let deck = Deck::new_shuffled(&mut rng);
+        let cards = deck.cards();
+        assert_eq!(cards.len(), 52);
+
+        // Verify uniqueness
+        let mut sorted = *cards;
+        sorted.sort();
+        for (i, &v) in sorted.iter().enumerate() {
+            assert_eq!(v, (i as u8) + 1);
+        }
+    }
+
+    #[test]
+    fn empty_trick_winner() {
+        // Empty trick
+        assert!(decide_trick_winner(&[], 1).is_none());
+
+        // Incomplete trick (has None)
+        let trick = vec![Some(1), None, Some(2)];
+        assert!(decide_trick_winner(&trick, 1).is_none());
+    }
+
+    #[test]
+    fn legal_play_edge_cases() {
+        let hand = vec![1, 14, 27]; // A club, A diamond, A spade
+
+        // No lead yet - anything goes
+        let empty_trick = vec![None, None, None, None];
+        assert!(is_legal_play(1, &empty_trick, &hand));
+        assert!(is_legal_play(14, &empty_trick, &hand));
+
+        // Lead is Hearts (40), we have none - anything goes
+        let hearts_led = vec![Some(40), None, None, None];
+        assert!(is_legal_play(1, &hearts_led, &hand)); // Discard Club
+        assert!(is_legal_play(14, &hearts_led, &hand)); // Discard Diamond
+
+        // Lead is Clubs (13), we have a Club (1) - must follow
+        let clubs_led = vec![Some(13), None, None, None];
+        assert!(is_legal_play(1, &clubs_led, &hand)); // Follow suit
+        assert!(!is_legal_play(14, &clubs_led, &hand)); // Revoke (Diamond)
     }
 }

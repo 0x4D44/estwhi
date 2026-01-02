@@ -1,4 +1,4 @@
-#![windows_subsystem = "windows"]
+#![cfg_attr(not(test), windows_subsystem = "windows")]
 #![allow(clippy::let_unit_value)]
 #![allow(clippy::cmp_null)]
 #![allow(dead_code)]
@@ -51,8 +51,11 @@ use std::ffi::c_void;
 use std::sync::{Mutex, OnceLock};
 
 use estwhi_core::{
+    ai::{calculate_bid, select_card_to_play},
+    config::{parse_score_mode, serialize_score_mode, validate_max_cards, validate_players},
     decide_trick_winner, is_legal_play, score_hand, sort_hand_for_display,
-    suit_index_from_legacy_id, Deck, ScoreMode,
+    state::{cards_to_deal, next_start_player, next_trump},
+    Deck, ScoreMode,
 };
 
 use rand::prelude::*;
@@ -372,15 +375,11 @@ fn load_config_from_registry() -> UiConfig {
 
     let ch = registry::get_u32("CheatCards", 0);
 
-    cfg.num_players = np.clamp(2, 6);
+    cfg.num_players = validate_players(np);
 
-    cfg.max_cards = mc.clamp(1, 15);
+    cfg.max_cards = validate_max_cards(mc);
 
-    cfg.score_mode = if sm == 0 {
-        ScoreMode::Vanilla
-    } else {
-        ScoreMode::Squared
-    };
+    cfg.score_mode = parse_score_mode(sm);
 
     cfg.next_notify = if nn == 0 {
         NextNotify::Dialog
@@ -400,13 +399,7 @@ fn save_config_to_registry(cfg: &UiConfig) {
 
     let _ = registry::set_u32("MaxCards", cfg.max_cards);
 
-    let _ = registry::set_u32(
-        "ScoreMode",
-        match cfg.score_mode {
-            ScoreMode::Vanilla => 0,
-            ScoreMode::Squared => 1,
-        },
-    );
+    let _ = registry::set_u32("ScoreMode", serialize_score_mode(cfg.score_mode));
 
     let _ = registry::set_u32(
         "NextCardNotify",
@@ -786,25 +779,13 @@ fn start_deal(hwnd: HWND) {
 
     let rn = app.game.round_no;
 
-    app.game.dealt_cards = if rn <= max { rn } else { (2 * max) - rn };
+    app.game.dealt_cards = cards_to_deal(rn, max);
 
     // Rotate trump and starting player each round (legacy parity)
 
-    app.game.trump = if app.game.trump == 0 || app.game.trump == 4 {
-        1
-    } else {
-        app.game.trump + 1
-    };
+    app.game.trump = next_trump(app.game.trump);
 
-    app.game.start_player = if app.game.start_player == 0 {
-        1
-    } else {
-        let mut s = app.game.start_player + 1;
-        if s > n as u32 {
-            s = 1
-        }
-        s
-    };
+    app.game.start_player = next_start_player(app.game.start_player, n as u32);
 
     app.game.in_progress = true;
 
@@ -2432,8 +2413,6 @@ fn create_default_menu(hwnd: HWND) {
 }
 
 fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
-    use rand::seq::SliceRandom;
-
     loop {
         let mut app = app_state().lock().unwrap();
 
@@ -2476,16 +2455,8 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
             }
 
             // AI plays a legal random card at seat cur
-
-            let lead_suit = app
-                .game
-                .trick
-                .iter()
-                .flatten()
-                .next()
-                .map(|&c| suit_index_from_legacy_id(c));
-
             let hand = app.game.hands[cur].clone();
+            let trick = app.game.trick.clone();
 
             if hand.is_empty() {
                 app.game.current_player = cur;
@@ -2493,37 +2464,17 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
                 continue;
             }
 
-            let mut legal_idx: Vec<usize> = Vec::new();
-
-            if let Some(lead) = lead_suit {
-                let has_lead = hand.iter().any(|&c| suit_index_from_legacy_id(c) == lead);
-
-                if has_lead {
-                    for (i, &c) in hand.iter().enumerate() {
-                        if suit_index_from_legacy_id(c) == lead {
-                            legal_idx.push(i);
-                        }
-                    }
-                }
-            }
-
-            if legal_idx.is_empty() {
-                legal_idx = (0..hand.len()).collect();
-            }
-
             let mut rng = rand::thread_rng();
+            let card = select_card_to_play(&hand, &trick, &mut rng);
 
-            if let Some(&pick) = legal_idx.choose(&mut rng) {
-                let card = hand[pick];
-
-                let real = &mut app.game.hands[cur];
-
-                real.remove(pick);
-
-                app.game.trick[cur] = Some(card);
-
-                dbglog!("AI seat {} played card {}", cur, card);
+            // Remove card from hand and add to trick
+            let real = &mut app.game.hands[cur];
+            if let Some(pos) = real.iter().position(|&c| c == card) {
+                real.remove(pos);
             }
+            app.game.trick[cur] = Some(card);
+
+            dbglog!("AI seat {} played card {}", cur, card);
 
             // Update current player to next to act
 
@@ -3225,52 +3176,15 @@ fn run_bidding(hwnd: HWND) {
                 );
             } else {
                 // Simple AI call
-
                 let app = app_state().lock().unwrap();
-
                 let hand = app.game.hands[seat].clone();
-
                 let trump = app.game.trump;
-
                 drop(app);
 
-                let mut est: f32 = 0.0;
-
-                for id in hand {
-                    let r = ((id - 1) % 13) + 1; // 1..13, Ace=1
-
-                    est += match r {
-                        1 => 1.0,
-                        13 => 0.8,
-                        12 => 0.6,
-                        11 => 0.5,
-                        10 => 0.4,
-                        _ => 0.0,
-                    };
-
-                    if suit_index_from_legacy_id(id) == trump {
-                        est += 0.2;
-                    }
-                }
-
-                let mut call = est.round() as u32;
-
-                if call > no_cards {
-                    call = no_cards;
-                }
-
-                if is_last {
-                    let forbidden = no_cards.saturating_sub(sum_so_far);
-
-                    if call == forbidden {
-                        call = if call == 0 { 1 } else { call - 1 };
-                    }
-                }
+                let call = calculate_bid(&hand, trump, no_cards, sum_so_far, is_last);
 
                 let mut app2 = app_state().lock().unwrap();
-
                 app2.game.calls[seat] = call;
-
                 sum_so_far += call;
 
                 dbglog!(
