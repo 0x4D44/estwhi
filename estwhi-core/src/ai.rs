@@ -167,4 +167,58 @@ mod tests {
         let bid = calculate_bid(&hand, 2, 1, 1, true);
         assert_eq!(bid, 1);
     }
+
+    #[test]
+    fn bid_calculation_all_ranks() {
+        // Ace(1), King(13), Queen(12), Jack(11), Ten(10), Nine(9)
+        // Trump = Spades(3)
+        // Est: 1.0 + 0.8 + 0.6 + 0.5 + 0.4 + 0.0 = 3.3 -> rounds to 3
+        let hand = vec![1, 13, 12, 11, 10, 9];
+        let bid = calculate_bid(&hand, 3, 6, 0, false);
+        assert_eq!(bid, 3);
+    }
+
+    #[test]
+    fn bid_calculation_clamp() {
+        // Hand estimates 10, but only 5 cards dealt
+        let hand = vec![1; 10]; // 10 Aces
+        let bid = calculate_bid(&hand, 2, 5, 0, false);
+        assert_eq!(bid, 5);
+    }
+
+    #[test]
+    fn bid_last_player_no_collision() {
+        // Hand estimates 2, cards dealt 5, sum 0. Forbidden = 5.
+        // No collision, should remain 2.
+        let hand = vec![1, 1]; // 2 Aces
+        let bid = calculate_bid(&hand, 2, 5, 0, true);
+        assert_eq!(bid, 2);
+    }
+
+    #[test]
+    fn ai_select_card_simple() {
+        let hand = vec![1, 14, 27, 40]; // One of each suit
+        let trick = vec![None, None, None, None];
+        let mut rng = rand::thread_rng();
+        let card = select_card_to_play(&hand, &trick, &mut rng);
+        assert!(hand.contains(&card));
+    }
+
+    #[test]
+    fn ai_select_card_follow_suit() {
+        let hand = vec![1, 2, 14]; // 2 Clubs, 1 Diamond
+        let trick = vec![Some(13)]; // Club led (King of Clubs)
+        let mut rng = rand::thread_rng();
+        let card = select_card_to_play(&hand, &trick, &mut rng);
+        assert!(card == 1 || card == 2);
+    }
+
+    #[test]
+    #[should_panic(expected = "AI cannot play from empty hand")]
+    fn ai_select_card_empty_panic() {
+        let hand = vec![];
+        let trick = vec![];
+        let mut rng = rand::thread_rng();
+        let _ = select_card_to_play(&hand, &trick, &mut rng);
+    }
 }

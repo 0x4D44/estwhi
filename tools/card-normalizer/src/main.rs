@@ -1,8 +1,11 @@
-use image::{ImageBuffer, ImageError, Rgb, Rgba, RgbaImage};
+use image::{ImageBuffer, ImageError, Rgb};
 use std::env;
 use std::fs;
 use std::path::Path;
 use walkdir::WalkDir;
+
+mod img_utils;
+use img_utils::*;
 
 fn main() {
     if let Err(err) = run() {
@@ -61,43 +64,4 @@ fn normalize_bitmap(input: &Path, output: &Path) -> Result<(), ImageError> {
             Rgb([p[0], p[1], p[2]])
         });
     rgb.save(output)
-}
-
-fn detect_green_background(image: &RgbaImage) -> Option<[u8; 3]> {
-    let w = image.width();
-    let h = image.height();
-    let candidates = [
-        (0, 0),
-        (w.saturating_sub(1), 0),
-        (0, h.saturating_sub(1)),
-        (w.saturating_sub(1), h.saturating_sub(1)),
-    ];
-    for (x, y) in candidates {
-        let px = image.get_pixel(x, y);
-        let rgb = [px[0], px[1], px[2]];
-        if is_greenish(rgb) {
-            return Some(rgb);
-        }
-    }
-    None
-}
-
-fn whiten_background(image: &mut RgbaImage, bg: [u8; 3]) {
-    for px in image.pixels_mut() {
-        if color_close([px[0], px[1], px[2]], bg) {
-            *px = Rgba([255, 255, 255, 255]);
-        }
-    }
-}
-
-fn is_greenish(rgb: [u8; 3]) -> bool {
-    let [r, g, b] = rgb;
-    g > 120 && r < 100 && b < 100
-}
-
-fn color_close(a: [u8; 3], b: [u8; 3]) -> bool {
-    let dr = a[0] as i16 - b[0] as i16;
-    let dg = a[1] as i16 - b[1] as i16;
-    let db = a[2] as i16 - b[2] as i16;
-    dr.abs() <= 25 && dg.abs() <= 25 && db.abs() <= 25
 }

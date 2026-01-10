@@ -8,37 +8,25 @@ use windows::core::PCWSTR;
 use windows::Win32::Foundation::{BOOL, HMODULE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC,
-    CreateCompatibleDC as CreateCDC, CreateSolidBrush, DeleteDC, DeleteDC as DeleteDc,
-    DeleteObject, EndPaint, FillRect, GetSysColor, SelectObject, SelectObject as SelectObj,
-    SetBkMode, SetTextColor, TextOutW, COLOR_WINDOWTEXT, HBITMAP, HBRUSH, HDC, NOTSRCCOPY,
-    PAINTSTRUCT, SRCCOPY, TRANSPARENT,
+    BeginPaint, BitBlt, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, GetSysColor, SelectObject, SetBkMode, SetTextColor, TextOutW,
+    COLOR_WINDOWTEXT, HBITMAP, HBRUSH, PAINTSTRUCT, SRCCOPY, TRANSPARENT,
 };
-
-use windows::Win32::Graphics::Gdi::{GetObjectW, SetStretchBltMode, StretchBlt, BITMAP, HALFTONE};
-
-use windows::Win32::Graphics::Gdi::Rectangle as GdiRectangle;
 
 use windows::Win32::Foundation::COLORREF;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::EnableWindow;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use windows::Win32::Graphics::Gdi::FrameRect;
-
 use windows::Win32::Graphics::Gdi::{CreateFontIndirectW, LOGFONTW};
 
 use windows::Win32::UI::WindowsAndMessaging::WM_SETFONT;
 
-use windows::Win32::Graphics::Gdi::{
-    CreateDIBitmap, GetDC, ReleaseDC, BITMAPINFO, BITMAPINFOHEADER, CBM_INIT, DIB_RGB_COLORS,
-};
+use windows::Win32::Graphics::Gdi::{GetDC, ReleaseDC};
 
 use windows::Win32::Graphics::Gdi::InvalidateRect;
 
-use windows::Win32::System::LibraryLoader::{
-    FindResourceW, GetModuleHandleW, LoadResource, LockResource, SizeofResource,
-};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 
 use windows::Win32::System::Diagnostics::Debug::OutputDebugStringW;
 
@@ -46,15 +34,13 @@ use windows::Win32::UI::HiDpi::GetDpiForWindow;
 
 use windows::Win32::UI::Controls::InitCommonControls;
 
-use std::ffi::c_void;
-
 use std::sync::{Mutex, OnceLock};
 
 use estwhi_core::{
     ai::{calculate_bid, select_card_to_play},
-    config::{parse_score_mode, serialize_score_mode, validate_max_cards, validate_players},
+    config::calc_max_cards_for_players,
     decide_trick_winner, is_legal_play, score_hand, sort_hand_for_display,
-    state::{cards_to_deal, next_start_player, next_trump},
+    state::{cards_to_deal, next_player_to_act, next_start_player, next_trump},
     Deck, ScoreMode,
 };
 
@@ -62,12 +48,15 @@ use rand::prelude::*;
 
 use std::cell::RefCell;
 
+mod game_config;
+mod game_state;
 mod registry;
-
-#[inline]
-const fn make_int_resource(id: u16) -> PCWSTR {
-    PCWSTR(id as usize as *const u16)
-}
+mod rendering;
+mod ui_logic;
+use game_config::*;
+use game_state::*;
+use rendering::*;
+use ui_logic::*;
 
 #[inline]
 const fn loword(val: u32) -> u16 {
@@ -86,12 +75,6 @@ const BST_UNCHECKED_U: usize = 0;
 
 // ClassicLayout is now a runtime option (Options dialog + registry). Keep constants above.
 
-// Card bitmap nominal size
-
-const CARD_W: i32 = 71;
-
-const CARD_H: i32 = 96;
-
 // Cheat window constants
 const CHEAT_WINDOW_CLASS: &str = "EstwhiCheatCards";
 const CHEAT_WINDOW_WIDTH_BASE: f32 = 400.0;
@@ -99,24 +82,6 @@ const CHEAT_WINDOW_HEIGHT_BASE: f32 = 200.0;
 const SMALL_CARD_WIDTH_BASE: f32 = 41.0;
 const SMALL_CARD_HEIGHT_BASE: f32 = 55.0;
 const SMALL_MIN_WIDTH_BASE: f32 = 25.0;
-
-// Hand row absolute layout
-
-const HAND_Y: i32 = 228; // top-left Y for hand cards
-
-const HAND_X0: i32 = 10; // leftmost X for first hand card
-
-const HAND_SPAN_X: i32 = 500; // span used to compute classic ActWidth
-
-const MIN_WIDTH: i32 = 20; // minimum spacing threshold (classic message when too small)
-
-// Trick row absolute layout
-
-const TRICK_Y: i32 = 55;
-
-const TRICK_X0: i32 = 10;
-
-const TRICK_STEP: i32 = 30;
 
 const CLIENT_WIDTH: i32 = 600;
 const CLIENT_HEIGHT: i32 = 360;
@@ -129,7 +94,6 @@ const STATUS_HEIGHT: f32 = 24.0;
 // Random Things constants
 const ID_RNDTIMER: usize = 2000;
 const ID_ICNTIMER: usize = 2001;
-const THING_SIZE: i32 = 31;
 
 // Random Things dialog control IDs
 const IDC_RNDMULTSC: i32 = 660;
@@ -145,178 +109,6 @@ const IDC_RNDICONCK: i32 = 667;
 // Score panel: (340,20)-(585, 60 + 15 * players)
 // Played cards caption: (20,20)-(130,47); Your hand caption: (20,198)-(130,225)
 // Extra info box: (410,160)-(585,225); buttons remain at (530,232) and (530,285).
-
-#[derive(Copy, Clone, Debug, PartialEq, Eq)]
-
-enum NextNotify {
-    Dialog = 0,
-    Mouse = 1,
-}
-
-#[derive(Clone, Debug)]
-
-struct UiConfig {
-    num_players: u32, // 2..6
-
-    max_cards: u32, // 1..15
-
-    score_mode: ScoreMode,
-
-    next_notify: NextNotify,
-
-    confirm_exit: bool,
-
-    cheat_cards: bool,
-}
-
-impl Default for UiConfig {
-    fn default() -> Self {
-        Self {
-            num_players: 4,
-
-            max_cards: 13,
-
-            score_mode: ScoreMode::Vanilla,
-
-            next_notify: NextNotify::Mouse,
-
-            confirm_exit: true,
-
-            cheat_cards: false,
-        }
-    }
-}
-
-#[derive(Clone, Debug, Default)]
-
-struct GameState {
-    in_progress: bool,
-
-    round_no: u32,
-
-    trump: u32, // 1..4
-
-    start_player: u32,
-
-    dealt_cards: u32,
-
-    calls: Vec<u32>,
-
-    tricks: Vec<u32>,
-
-    scores: Vec<u32>,
-
-    last_winner: Option<u32>,
-
-    hand: Vec<u32>,
-
-    hand_positions: Vec<RECT>,
-
-    selected: Option<usize>,
-
-    hands: Vec<Vec<u32>>, // all players' hands (legacy ids)
-
-    trick: Vec<Option<u32>>, // current trick cards per player index
-
-    waiting_for_human: bool,
-
-    current_player: usize,
-
-    cards_remaining: u32,
-
-    // bidding helper for call dialog: forbidden call value for last bidder (if any)
-    bidding_forbidden: Option<u32>,
-
-    waiting_for_continue: bool,
-}
-
-#[derive(Clone, Debug)]
-struct RandomThingsConfig {
-    enabled: bool,
-    icon_twirl_enabled: bool,
-    multiplier: i32,
-    count: usize,
-    interval_ms: u32,
-}
-
-impl Default for RandomThingsConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            icon_twirl_enabled: true,
-            multiplier: 6,
-            count: 4,
-            interval_ms: 200,
-        }
-    }
-}
-
-#[derive(Clone, Debug)]
-struct RandomThingState {
-    x: i32,
-    y: i32,
-    bitmap_index: usize,
-}
-
-#[derive(Default)]
-struct RandomThings {
-    config: RandomThingsConfig,
-    things: Vec<RandomThingState>,
-    random_timer_active: bool,
-    icon_timer_active: bool,
-    icon_count: usize,
-}
-
-impl RandomThings {
-    fn validate_and_fix_config(&mut self) {
-        self.config.multiplier = self.config.multiplier.clamp(1, 20);
-        self.config.count = self.config.count.clamp(1, 4);
-        self.config.interval_ms = self.config.interval_ms.clamp(20, 1000);
-    }
-
-    fn resize_things(&mut self, client_width: i32, client_height: i32) {
-        let current_count = self.things.len();
-        let new_count = self.config.count;
-
-        match new_count.cmp(&current_count) {
-            std::cmp::Ordering::Greater => {
-                for i in current_count..new_count {
-                    // Initialize in the table area (left side), not center of whole window
-                    // The table is roughly 2/3 of width and most of height
-                    let safe_x = (client_width / 3).max(100);
-                    let safe_y = (client_height / 3).max(100);
-                    self.things.push(RandomThingState {
-                        x: safe_x,
-                        y: safe_y,
-                        bitmap_index: i % 4,
-                    });
-                }
-            }
-            std::cmp::Ordering::Less => {
-                self.things.truncate(new_count);
-            }
-            std::cmp::Ordering::Equal => {}
-        }
-    }
-}
-
-#[derive(Default)]
-
-struct CheatWindowState {
-    hwnd: Option<isize>,
-    offset_x: i32, // Offset from main window left edge
-    offset_y: i32, // Offset from main window top edge
-}
-
-struct AppState {
-    config: UiConfig,
-
-    game: GameState,
-
-    random_things: RandomThings,
-
-    cheat_window: CheatWindowState,
-}
 
 #[derive(Copy, Clone)]
 
@@ -346,6 +138,8 @@ thread_local! {
 
 static APP_STATE: OnceLock<Mutex<AppState>> = OnceLock::new();
 
+use std::sync::MutexGuard;
+
 fn app_state() -> &'static Mutex<AppState> {
     APP_STATE.get_or_init(|| {
         let mut app = AppState {
@@ -360,101 +154,21 @@ fn app_state() -> &'static Mutex<AppState> {
     })
 }
 
-fn load_config_from_registry() -> UiConfig {
-    let mut cfg = UiConfig::default();
-
-    let np = registry::get_u32("NumberOfPlayers", cfg.num_players);
-
-    let mc = registry::get_u32("MaxCards", cfg.max_cards);
-
-    let sm = registry::get_u32("ScoreMode", 0);
-
-    let nn = registry::get_u32("NextCardNotify", 1);
-
-    let ce = registry::get_u32("ConfirmExit", 1);
-
-    let ch = registry::get_u32("CheatCards", 0);
-
-    cfg.num_players = validate_players(np);
-
-    cfg.max_cards = validate_max_cards(mc);
-
-    cfg.score_mode = parse_score_mode(sm);
-
-    cfg.next_notify = if nn == 0 {
-        NextNotify::Dialog
-    } else {
-        NextNotify::Mouse
-    };
-
-    cfg.confirm_exit = ce != 0;
-
-    cfg.cheat_cards = ch != 0;
-
-    cfg
-}
-
-fn save_config_to_registry(cfg: &UiConfig) {
-    let _ = registry::set_u32("NumberOfPlayers", cfg.num_players);
-
-    let _ = registry::set_u32("MaxCards", cfg.max_cards);
-
-    let _ = registry::set_u32("ScoreMode", serialize_score_mode(cfg.score_mode));
-
-    let _ = registry::set_u32(
-        "NextCardNotify",
-        match cfg.next_notify {
-            NextNotify::Dialog => 0,
-            NextNotify::Mouse => 1,
-        },
-    );
-
-    let _ = registry::set_u32("ConfirmExit", if cfg.confirm_exit { 1 } else { 0 });
-
-    let _ = registry::set_u32("CheatCards", if cfg.cheat_cards { 1 } else { 0 });
-}
-
-fn load_cheat_window_state() -> CheatWindowState {
-    CheatWindowState {
-        hwnd: None,
-        offset_x: registry::get_u32("CheatWindowOffsetX", 100) as i32,
-        offset_y: registry::get_u32("CheatWindowOffsetY", 100) as i32,
+// Helper: Safe access to app state (recovers from poison)
+fn lock_app_state() -> MutexGuard<'static, AppState> {
+    match app_state().lock() {
+        Ok(guard) => guard,
+        Err(poisoned) => poisoned.into_inner(),
     }
 }
 
-fn save_cheat_window_state(state: &CheatWindowState) {
-    let _ = registry::set_u32("CheatWindowOffsetX", state.offset_x as u32);
-    let _ = registry::set_u32("CheatWindowOffsetY", state.offset_y as u32);
-}
-
-fn load_random_things_config() -> RandomThingsConfig {
-    let def = RandomThingsConfig::default();
-    let mut cfg = RandomThingsConfig {
-        multiplier: registry::rt_get_u32("Multiplier", def.multiplier as u32) as i32,
-        count: registry::rt_get_u32("Number of", def.count as u32) as usize,
-        interval_ms: registry::rt_get_u32("Time interval", def.interval_ms),
-        enabled: registry::rt_get_u32("They exist", if def.enabled { 1 } else { 0 }) != 0,
-        icon_twirl_enabled: registry::rt_get_u32(
-            "Icon twirl",
-            if def.icon_twirl_enabled { 1 } else { 0 },
-        ) != 0,
-    };
-    cfg.multiplier = cfg.multiplier.clamp(1, 20);
-    cfg.count = cfg.count.clamp(1, 4);
-    cfg.interval_ms = cfg.interval_ms.clamp(20, 1000);
-    cfg
-}
-
-fn save_random_things_config(cfg: &RandomThingsConfig) {
-    let _ = registry::rt_set_u32("Multiplier", cfg.multiplier as u32);
-    let _ = registry::rt_set_u32("Number of", cfg.count as u32);
-    let _ = registry::rt_set_u32("Time interval", cfg.interval_ms);
-    let _ = registry::rt_set_u32("They exist", if cfg.enabled { 1 } else { 0 });
-    let _ = registry::rt_set_u32("Icon twirl", if cfg.icon_twirl_enabled { 1 } else { 0 });
+// Helper: Safe access to module handle
+unsafe fn get_hinstance() -> HMODULE {
+    GetModuleHandleW(None).unwrap_or(HMODULE(0 as _))
 }
 
 unsafe fn start_random_things(hwnd: HWND) {
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
     if !app.random_things.config.enabled || app.game.in_progress {
         return;
     }
@@ -471,7 +185,7 @@ unsafe fn start_random_things(hwnd: HWND) {
 }
 
 unsafe fn stop_random_things(hwnd: HWND) {
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
     if app.random_things.random_timer_active {
         let _ = KillTimer(hwnd, ID_RNDTIMER);
         app.random_things.random_timer_active = false;
@@ -481,7 +195,7 @@ unsafe fn stop_random_things(hwnd: HWND) {
 }
 
 unsafe fn start_icon_twirl(hwnd: HWND) {
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
     if !app.random_things.config.icon_twirl_enabled {
         return;
     }
@@ -491,7 +205,7 @@ unsafe fn start_icon_twirl(hwnd: HWND) {
 }
 
 unsafe fn stop_icon_twirl(hwnd: HWND) {
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
     if app.random_things.icon_timer_active {
         let _ = KillTimer(hwnd, ID_ICNTIMER);
         app.random_things.icon_timer_active = false;
@@ -519,7 +233,7 @@ unsafe fn on_random_timer(hwnd: HWND) {
     UI_HANDLES.with(|h| {
         let hh = h.borrow();
         let green_brush = hh.hbr_green;
-        let mut app = app_state().lock().unwrap();
+        let mut app = lock_app_state();
 
         // Phase 1: Clear old positions with green
         for thing in &app.random_things.things {
@@ -591,7 +305,7 @@ unsafe fn on_random_timer(hwnd: HWND) {
                 _ => "HEART",
             };
             if let Ok(obj) = LoadImageW(
-                GetModuleHandleW(None).unwrap(),
+                get_hinstance(),
                 PCWSTR(wide(name).as_ptr()),
                 IMAGE_BITMAP,
                 0,
@@ -616,9 +330,9 @@ unsafe fn on_icon_timer(hwnd: HWND) {
     if !IsIconic(hwnd).as_bool() {
         return;
     }
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
     app.random_things.icon_count = (app.random_things.icon_count + 1) % 3;
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
     let icon_id = make_int_resource((1 + app.random_things.icon_count) as u16);
     if let Ok(icon) = LoadIconW(hinst, icon_id) {
         let hdc = GetDC(hwnd);
@@ -669,89 +383,8 @@ macro_rules! dbglog {
     }};
 }
 
-fn next_player_to_act(start_player1: u32, trick: &[Option<u32>]) -> Option<usize> {
-    let n = trick.len();
-    if n == 0 {
-        return None;
-    }
-    let start0 = start_player1.saturating_sub(1) as usize;
-    for i in 0..n {
-        let p = (start0 + i) % n;
-        if trick[p].is_none() {
-            return Some(p);
-        }
-    }
-    None
-}
-static CARD_BITMAPS: OnceLock<Mutex<Vec<Option<isize>>>> = OnceLock::new();
-
-fn card_bitmap_cache() -> &'static Mutex<Vec<Option<isize>>> {
-    CARD_BITMAPS.get_or_init(|| Mutex::new(vec![None; 52]))
-}
-
-unsafe fn load_card_bitmap_resource(card_id: u32) -> Option<HBITMAP> {
-    let hinst = GetModuleHandleW(None).ok()?;
-    let res = FindResourceW(hinst, make_int_resource(card_id as u16), RT_BITMAP);
-    if res.0.is_null() {
-        return None;
-    }
-    let size = SizeofResource(hinst, res);
-    if size == 0 {
-        return None;
-    }
-    let handle = LoadResource(hinst, res).ok()?;
-    let locked = LockResource(handle);
-    if locked.is_null() {
-        return None;
-    }
-    let data = locked as *const u8;
-    let header_size = *(data as *const u32) as usize;
-    if header_size == 0 || header_size >= size as usize {
-        return None;
-    }
-    let header_ptr = data as *const BITMAPINFOHEADER;
-    let bits_ptr = data.add(header_size);
-    let hdc = GetDC(HWND(0 as _));
-    if hdc.0.is_null() {
-        return None;
-    }
-    let hbmp = CreateDIBitmap(
-        hdc,
-        Some(header_ptr),
-        CBM_INIT as u32,
-        Some(bits_ptr as *const c_void),
-        Some(header_ptr as *const BITMAPINFO),
-        DIB_RGB_COLORS,
-    );
-    let _ = ReleaseDC(HWND(0 as _), hdc);
-    if hbmp.0.is_null() {
-        None
-    } else {
-        Some(hbmp)
-    }
-}
-
-fn get_card_bitmap(card_id: u32) -> Option<HBITMAP> {
-    if card_id == 0 || card_id > 52 {
-        return None;
-    }
-    let mut cache = card_bitmap_cache().lock().unwrap();
-    let idx = (card_id - 1) as usize;
-    if let Some(ptr) = cache[idx] {
-        return Some(HBITMAP(ptr as *mut _));
-    }
-    let loaded = unsafe { load_card_bitmap_resource(card_id) };
-    if let Some(hbmp) = loaded {
-        cache[idx] = Some(hbmp.0 as isize);
-        Some(hbmp)
-    } else {
-        dbglog!("Failed to load bitmap for card {}", card_id);
-        None
-    }
-}
-
 fn start_deal(hwnd: HWND) {
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
 
     let n = app.config.num_players as usize;
 
@@ -879,14 +512,9 @@ fn start_deal(hwnd: HWND) {
     advance_ai_until_human_or_trick_end(hwnd);
 }
 
-fn wide(s: &str) -> Vec<u16> {
-    use std::os::windows::prelude::*;
-
-    std::ffi::OsStr::new(s)
-        .encode_wide()
-        .chain(std::iter::once(0))
-        .collect()
-}
+// --------------------------------------------------------------------------------------
+// Menu & Dialog Logic
+// --------------------------------------------------------------------------------------
 
 fn main() -> windows::core::Result<()> {
     unsafe {
@@ -921,7 +549,7 @@ fn main() -> windows::core::Result<()> {
 
             hIcon: hicon,
 
-            hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+            hCursor: LoadCursorW(None, IDC_ARROW)?,
 
             hbrBackground: HBRUSH(std::ptr::null_mut()),
 
@@ -1049,7 +677,7 @@ fn main() -> windows::core::Result<()> {
                 hinstance,
                 None,
             )
-            .unwrap();
+            .unwrap_or_default();
 
             let mut lf: LOGFONTW = core::mem::zeroed();
 
@@ -1098,7 +726,7 @@ fn main() -> windows::core::Result<()> {
                     hinstance,
                     None,
                 )
-                .unwrap();
+                .unwrap_or_default();
 
                 let _ = SendMessageW(deal_btn, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
 
@@ -1116,7 +744,7 @@ fn main() -> windows::core::Result<()> {
                     hinstance,
                     None,
                 )
-                .unwrap();
+                .unwrap_or_default();
 
                 let _ = SendMessageW(exit_btn, WM_SETFONT, WPARAM(hfont.0 as usize), LPARAM(1));
 
@@ -1131,7 +759,7 @@ fn main() -> windows::core::Result<()> {
         // Create cheat window if flag is set
         {
             let should_create = {
-                let app = app_state().lock().unwrap();
+                let app = lock_app_state();
                 app.config.cheat_cards
             };
 
@@ -1142,7 +770,7 @@ fn main() -> windows::core::Result<()> {
                     PCWSTR(wide("Error").as_ptr()),
                     MB_ICONHAND | MB_OK,
                 );
-                app_state().lock().unwrap().config.cheat_cards = false;
+                lock_app_state().config.cheat_cards = false;
             }
         }
 
@@ -1195,7 +823,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     102 => {
                         // Options - with cheat window toggle logic
                         let old_cheat_flag = {
-                            let app = app_state().lock().unwrap();
+                            let app = lock_app_state();
                             app.config.cheat_cards
                         };
 
@@ -1203,7 +831,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
                         // Check if cheat cards flag changed
                         let new_cheat_flag = {
-                            let app = app_state().lock().unwrap();
+                            let app = lock_app_state();
                             app.config.cheat_cards
                         };
 
@@ -1220,7 +848,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                                         PCWSTR(wide("Error").as_ptr()),
                                         MB_ICONHAND | MB_OK,
                                     );
-                                    app_state().lock().unwrap().config.cheat_cards = false;
+                                    lock_app_state().config.cheat_cards = false;
                                 }
                             } else {
                                 // Close cheat window
@@ -1253,7 +881,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
             WM_MOVE => {
                 // Move cheat window to maintain relative position
                 let hwnd_opt = {
-                    let app = app_state().lock().unwrap();
+                    let app = lock_app_state();
                     app.cheat_window.hwnd
                 };
 
@@ -1265,7 +893,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     if GetWindowRect(hwnd, &mut parent_rect).is_ok() {
                         // Get offset
                         let (offset_x, offset_y) = {
-                            let app = app_state().lock().unwrap();
+                            let app = lock_app_state();
                             (app.cheat_window.offset_x, app.cheat_window.offset_y)
                         };
 
@@ -1305,7 +933,7 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                 let scale = dpi / 96.0;
                 let status_h = (24.0 * scale).round() as i32;
 
-                let hand_h = (CARD_H as f32 * scale).round() as i32;
+                let hand_h = (rendering::CARD_H as f32 * scale).round() as i32;
                 let hand_top = (rc.bottom - status_h - hand_h).max(0);
                 let hand_rc = RECT {
                     left: 0,
@@ -1333,111 +961,136 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 
                 let green = CreateSolidBrush(COLORREF(128 << 8));
 
-                let game_in_progress = app_state().lock().unwrap().game.in_progress;
+                // Scope for app lock
+                {
+                    let mut app = lock_app_state();
+                    let game_in_progress = app.game.in_progress;
 
-                if game_in_progress {
-                    // Game in progress: Draw all UI elements
-                    FillRect(memdc, &table_rc, green);
-                    draw_bevel_box(memdc, info_rc);
-                    FillRect(memdc, &info_rc, green);
-                    draw_info_panel(memdc, &info_rc, scale);
-                    FillRect(memdc, &hand_rc, green);
+                    if game_in_progress {
+                        // Game in progress: Draw all UI elements
+                        FillRect(memdc, &table_rc, green);
+                        rendering::draw_bevel_box(memdc, info_rc);
+                        FillRect(memdc, &info_rc, green);
 
-                    // Always use classic layout for retro feel
-                    draw_hand_classic(memdc);
-
-                    let pb_rc = RECT {
-                        left: (20.0 * scale).round() as i32,
-                        top: (20.0 * scale).round() as i32,
-                        right: (130.0 * scale).round() as i32,
-                        bottom: (47.0 * scale).round() as i32,
-                    };
-                    draw_bevel_box(memdc, pb_rc);
-                    let played_lbl = wide("Played cards:");
-                    let _ = TextOutW(
-                        memdc,
-                        (30.0 * scale).round() as i32,
-                        (26.0 * scale).round() as i32,
-                        &played_lbl[..played_lbl.len() - 1],
-                    );
-
-                    let yh_rc = RECT {
-                        left: (20.0 * scale).round() as i32,
-                        top: (198.0 * scale).round() as i32,
-                        right: (130.0 * scale).round() as i32,
-                        bottom: (225.0 * scale).round() as i32,
-                    };
-                    draw_bevel_box(memdc, yh_rc);
-                    let hand_lbl = wide("Your hand:");
-                    let _ = TextOutW(
-                        memdc,
-                        (30.0 * scale).round() as i32,
-                        (204.0 * scale).round() as i32,
-                        &hand_lbl[..hand_lbl.len() - 1],
-                    );
-
-                    let other_rc = RECT {
-                        left: (410.0 * scale).round() as i32,
-                        top: (160.0 * scale).round() as i32,
-                        right: (585.0 * scale).round() as i32,
-                        bottom: (225.0 * scale).round() as i32,
-                    };
-                    draw_bevel_box(memdc, other_rc);
-                    draw_extra_info(memdc, &other_rc, scale);
-
-                    // Always use classic layout for retro feel
-                    draw_trick_classic(memdc);
-                } else {
-                    // No game: Just green background with IC_LOGO and random things
-                    FillRect(memdc, &rc, green);
-
-                    // Draw IC_LOGO at fixed position (matching original at 285, 80)
-                    if let Ok(obj) = LoadImageW(
-                        GetModuleHandleW(None).unwrap(),
-                        PCWSTR(wide("IC_LOGO").as_ptr()),
-                        IMAGE_BITMAP,
-                        0,
-                        0,
-                        LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
-                    ) {
-                        blit_bitmap(
+                        rendering::draw_info_panel(
                             memdc,
-                            HBITMAP(obj.0),
-                            (285.0 * scale).round() as i32,
-                            (80.0 * scale).round() as i32,
-                            31,
-                            31,
+                            app.config.num_players,
+                            app.config.max_cards,
+                            &app.game,
                         );
-                    }
 
-                    // Draw random things at their current positions
-                    let app = app_state().lock().unwrap();
-                    for thing in &app.random_things.things {
-                        let name = match thing.bitmap_index {
-                            0 => "CLUB",
-                            1 => "DIAMOND",
-                            2 => "SPADE",
-                            _ => "HEART",
+                        FillRect(memdc, &hand_rc, green);
+
+                        // Always use classic layout for retro feel
+                        // Update hand positions in state
+                        let new_positions = rendering::draw_hand_classic(memdc, &app.game);
+                        app.game.hand_positions = new_positions;
+
+                        let pb_rc = RECT {
+                            left: (20.0 * scale).round() as i32,
+                            top: (20.0 * scale).round() as i32,
+                            right: (130.0 * scale).round() as i32,
+                            bottom: (47.0 * scale).round() as i32,
                         };
+                        rendering::draw_bevel_box(memdc, pb_rc);
+                        let played_lbl = rendering::wide("Played cards:");
+                        let _ = TextOutW(
+                            memdc,
+                            (30.0 * scale).round() as i32,
+                            (26.0 * scale).round() as i32,
+                            &played_lbl[..played_lbl.len() - 1],
+                        );
+
+                        let yh_rc = RECT {
+                            left: (20.0 * scale).round() as i32,
+                            top: (198.0 * scale).round() as i32,
+                            right: (130.0 * scale).round() as i32,
+                            bottom: (225.0 * scale).round() as i32,
+                        };
+                        rendering::draw_bevel_box(memdc, yh_rc);
+                        let hand_lbl = rendering::wide("Your hand:");
+                        let _ = TextOutW(
+                            memdc,
+                            (30.0 * scale).round() as i32,
+                            (204.0 * scale).round() as i32,
+                            &hand_lbl[..hand_lbl.len() - 1],
+                        );
+
+                        let other_rc = RECT {
+                            left: (410.0 * scale).round() as i32,
+                            top: (160.0 * scale).round() as i32,
+                            right: (585.0 * scale).round() as i32,
+                            bottom: (225.0 * scale).round() as i32,
+                        };
+                        rendering::draw_bevel_box(memdc, other_rc);
+                        rendering::draw_extra_info(
+                            memdc,
+                            &other_rc,
+                            app.config.max_cards,
+                            &app.game,
+                        );
+
+                        // Always use classic layout for retro feel
+                        let hbr_green = UI_HANDLES.with(|h| h.borrow().hbr_green);
+                        rendering::draw_trick_classic(
+                            memdc,
+                            app.config.num_players,
+                            app.game.start_player,
+                            &app.game.trick,
+                            hbr_green,
+                        );
+                    } else {
+                        // No game: Just green background with IC_LOGO and random things
+                        FillRect(memdc, &rc, green);
+
+                        // Draw IC_LOGO at fixed position (matching original at 285, 80)
                         if let Ok(obj) = LoadImageW(
-                            GetModuleHandleW(None).unwrap(),
-                            PCWSTR(wide(name).as_ptr()),
+                            get_hinstance(),
+                            PCWSTR(rendering::wide("IC_LOGO").as_ptr()),
                             IMAGE_BITMAP,
                             0,
                             0,
                             LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
                         ) {
-                            blit_bitmap(
+                            rendering::blit_bitmap(
                                 memdc,
                                 HBITMAP(obj.0),
-                                thing.x,
-                                thing.y,
-                                THING_SIZE,
-                                THING_SIZE,
+                                (285.0 * scale).round() as i32,
+                                (80.0 * scale).round() as i32,
+                                31,
+                                31,
                             );
                         }
+
+                        // Draw random things at their current positions
+                        // Random things logic is now in app state, so safe to access
+                        for thing in &app.random_things.things {
+                            let name = match thing.bitmap_index {
+                                0 => "CLUB",
+                                1 => "DIAMOND",
+                                2 => "SPADE",
+                                _ => "HEART",
+                            };
+                            if let Ok(obj) = LoadImageW(
+                                get_hinstance(),
+                                PCWSTR(rendering::wide(name).as_ptr()),
+                                IMAGE_BITMAP,
+                                0,
+                                0,
+                                LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
+                            ) {
+                                rendering::blit_bitmap(
+                                    memdc,
+                                    HBITMAP(obj.0),
+                                    thing.x,
+                                    thing.y,
+                                    rendering::THING_SIZE, // Wait, THING_SIZE is in ui_logic? No, moved to rendering?
+                                    rendering::THING_SIZE,
+                                );
+                            }
+                        }
                     }
-                }
+                } // End app scope
 
                 let _ = BitBlt(
                     hdc,
@@ -1510,21 +1163,12 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
                     }
                 });
 
-                if let Some(cache) = CARD_BITMAPS.get() {
-                    let mut cache = cache.lock().unwrap();
-
-                    for entry in cache.iter_mut() {
-                        if let Some(ptr) = entry.take() {
-                            let hbmp = HBITMAP(ptr as *mut _);
-                            let _ = DeleteObject(hbmp);
-                        }
-                    }
-                }
+                rendering::cleanup_resources();
 
                 // Clean up cheat cards window
                 cleanup_cheat_window();
 
-                let _st = app_state().lock().unwrap();
+                let _st = lock_app_state();
 
                 // Save window position before destroying
                 let mut rect = RECT::default();
@@ -1546,190 +1190,6 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
     }
 }
 
-#[allow(dead_code)]
-unsafe fn draw_status(hdc: HDC, rc: &RECT, text: &str) {
-    SetBkMode(hdc, TRANSPARENT);
-
-    SetTextColor(hdc, COLORREF(0x000000));
-
-    let mut r = *rc;
-
-    r.left += 8;
-
-    r.top += 4;
-
-    let w = wide(text);
-
-    let sl = &w[..w.len() - 1];
-
-    let _ = TextOutW(hdc, r.left, r.top, sl);
-}
-
-unsafe fn draw_info_panel(hdc: HDC, _rc: &RECT, _scale: f32) {
-    // Classic absolute layout for info grid and footer lines
-
-    // Draw main info box
-
-    draw_bevel_box(
-        hdc,
-        RECT {
-            left: 340,
-            top: 20,
-            right: 585,
-            bottom: 60 + 15 * (app_state().lock().unwrap().config.num_players as i32),
-        },
-    );
-
-    // Headings
-
-    SetBkMode(hdc, windows::Win32::Graphics::Gdi::OPAQUE);
-
-    SetTextColor(hdc, COLORREF(0x000000));
-
-    // Match button-face background
-
-    let btnface = COLORREF(0x00F0F0F0);
-
-    windows::Win32::Graphics::Gdi::SetBkColor(hdc, btnface);
-
-    let heads = [(420, "Calls:"), (470, "Tricks:"), (520, "Scores:")];
-
-    for (x, s) in heads {
-        let w = wide(s);
-        let sl = &w[..w.len() - 1];
-        let _ = TextOutW(hdc, x, 30, sl);
-    }
-
-    // Player labels and values
-
-    let app = app_state().lock().unwrap();
-
-    for i in 0..app.config.num_players as usize {
-        let y = 35 + 15 * ((i + 1) as i32);
-
-        let label = wide(&format!("Player {}:", i + 1));
-        let sll = &label[..label.len() - 1];
-
-        let _ = TextOutW(hdc, 350, y, sll);
-
-        let calls = wide(&format!("{}", app.game.calls.get(i).copied().unwrap_or(0)));
-        let slc = &calls[..calls.len() - 1];
-
-        let _ = TextOutW(hdc, 430, y, slc);
-
-        let tricks = wide(&format!("{}", app.game.tricks.get(i).copied().unwrap_or(0)));
-        let slt = &tricks[..tricks.len() - 1];
-
-        let _ = TextOutW(hdc, 490, y, slt);
-
-        let score = wide(&format!("{}", app.game.scores.get(i).copied().unwrap_or(0)));
-        let sls = &score[..score.len() - 1];
-
-        let _ = TextOutW(hdc, 540, y, sls);
-    }
-
-    // Footer lines: Round number, Player to start, Last trick winner
-
-    let total_rounds = {
-        let max = app.config.max_cards;
-        (max * 2).saturating_sub(1)
-    };
-
-    let w1 = wide(&format!(
-        "Round number: {} of {}",
-        app.game.round_no, total_rounds
-    ));
-    let s1 = &w1[..w1.len() - 1];
-
-    let _ = TextOutW(hdc, 420, 170, s1);
-
-    let w2 = wide(&format!(
-        "Player to start: {}",
-        app.game.start_player.max(1)
-    ));
-    let s2 = &w2[..w2.len() - 1];
-
-    let _ = TextOutW(hdc, 420, 185, s2);
-
-    let last = app.game.last_winner.unwrap_or(0);
-
-    let w3 = if last > 0 {
-        wide(&format!("Last trick won by: {}", last))
-    } else {
-        wide("Last trick won by:      ")
-    };
-
-    let s3 = &w3[..w3.len() - 1];
-
-    let _ = TextOutW(hdc, 420, 200, s3);
-
-    // Trump suit small icon at (285,80)
-
-    // Trump mapping follows legacy: 1=Clubs,2=Diamonds,3=Spades,4=Hearts
-
-    let name = match app.game.trump {
-        1 => Some("CLUB"),
-        2 => Some("DIAMOND"),
-        3 => Some("SPADE"),
-        4 => Some("HEART"),
-        _ => None,
-    };
-
-    if let Some(id) = name {
-        if let Ok(obj) = LoadImageW(
-            GetModuleHandleW(None).unwrap(),
-            PCWSTR(wide(id).as_ptr()),
-            IMAGE_BITMAP,
-            0,
-            0,
-            LR_DEFAULTSIZE | LR_CREATEDIBSECTION,
-        ) {
-            blit_bitmap(hdc, HBITMAP(obj.0), 285, 80, 31, 31);
-        }
-    }
-
-    SetBkMode(hdc, TRANSPARENT);
-}
-
-unsafe fn draw_extra_info(hdc: HDC, rc: &RECT, _scale: f32) {
-    SetBkMode(hdc, windows::Win32::Graphics::Gdi::OPAQUE);
-    SetTextColor(hdc, COLORREF(0x000000));
-    windows::Win32::Graphics::Gdi::SetBkColor(hdc, COLORREF(0x00F0F0F0));
-
-    let app = app_state().lock().unwrap();
-
-    let mut y = rc.top + 10;
-    let x = rc.left + 10;
-    let line_height = 15;
-
-    // Calculate total rounds (matching Pascal: NumberofRounds = (NoMaxCards * 2) - 1)
-    let total_rounds = (app.config.max_cards * 2).saturating_sub(1);
-
-    // Round number: X of Y
-    let round_text = wide(&format!(
-        "Round number: {} of {}",
-        app.game.round_no, total_rounds
-    ));
-    let _ = TextOutW(hdc, x, y, &round_text[..round_text.len() - 1]);
-    y += line_height;
-
-    // Player to start: X
-    let start_text = wide(&format!("Player to start: {}", app.game.start_player));
-    let _ = TextOutW(hdc, x, y, &start_text[..start_text.len() - 1]);
-    y += line_height;
-
-    // Last trick won by: X
-    let winner_str = if let Some(w) = app.game.last_winner {
-        format!("{}", w)
-    } else {
-        "      ".to_string()
-    };
-    let winner_text = wide(&format!("Last trick won by: {}", winner_str));
-    let _ = TextOutW(hdc, x, y, &winner_text[..winner_text.len() - 1]);
-
-    SetBkMode(hdc, TRANSPARENT);
-}
-
 // Clear shown trick, advance or score, and set up next actor/round.
 
 // Returns true if the hand ended (and next round started or game ended).
@@ -1737,7 +1197,7 @@ unsafe fn draw_extra_info(hdc: HDC, rc: &RECT, _scale: f32) {
 fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
     // Hold one lock across logic to avoid races
 
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
 
     // Clear trick and decrement remaining
 
@@ -1805,7 +1265,7 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
                 wide("Well done! - You've won!")
             } else {
                 // Find which player won
-                let app = app_state().lock().unwrap();
+                let app = lock_app_state();
                 let winner = app
                     .game
                     .scores
@@ -1828,7 +1288,7 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
             }
 
             // NOW mark the game as not in progress (after user sees the final state)
-            app_state().lock().unwrap().game.in_progress = false;
+            lock_app_state().game.in_progress = false;
 
             if human_best >= best_score {
                 maybe_update_high_scores(hwnd, human_best);
@@ -1888,445 +1348,9 @@ fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
 
 // Classic hand drawing (absolute 96-DPI coordinates; overlap and invert for illegal)
 
-unsafe fn draw_hand_classic(hdc: HDC) {
-    let app_snapshot = app_state().lock().unwrap();
-
-    let n = app_snapshot.game.hand.len();
-
-    if n == 0 {
-        return;
-    }
-
-    let act_width = if n > 1 {
-        let mut w = (HAND_SPAN_X - CARD_W) / ((n - 1) as i32);
-
-        if w > (CARD_W + 10) {
-            w = CARD_W + 10;
-        }
-
-        w
-    } else {
-        CARD_W
-    };
-
-    if n > 1 && act_width <= MIN_WIDTH {
-        drop(app_snapshot);
-
-        let _ = MessageBoxW(
-            HWND(0 as _),
-            PCWSTR(wide("Window too small to draw cards").as_ptr()),
-            PCWSTR(wide("Estimation Whist").as_ptr()),
-            MB_ICONINFORMATION,
-        );
-
-        return;
-    }
-
-    // Prepare text mode for any labels if needed
-
-    SetBkMode(hdc, TRANSPARENT);
-
-    SetTextColor(hdc, COLORREF(0x000000));
-
-    let mut positions: Vec<RECT> = Vec::with_capacity(n);
-
-    let mut x = HAND_X0;
-
-    let y = HAND_Y;
-
-    let mut last_idx: Option<usize> = None;
-
-    for i in 0..n {
-        let r = RECT {
-            left: x,
-            top: y,
-            right: x + CARD_W,
-            bottom: y + CARD_H,
-        };
-
-        // Overlap truncation for previous rect when spacing < full width
-
-        if let Some(pi) = last_idx {
-            if act_width < CARD_W {
-                if let Some(prev) = positions.get_mut(pi) {
-                    prev.right = prev.left + act_width;
-                }
-            }
-        }
-
-        // Draw card bitmap with invert if illegal
-
-        let card_id = app_snapshot.game.hand[i];
-
-        let legal = is_legal_play(card_id, &app_snapshot.game.trick, &app_snapshot.game.hand);
-
-        if let Some(hbmp) = get_card_bitmap(card_id) {
-            blit_card(hdc, hbmp, r.left, r.top, !legal);
-        } else {
-            // Fallback: simple frame and id
-
-            let _ = GdiRectangle(hdc, r.left, r.top, r.right, r.bottom);
-
-            let label = wide(&format!("{}", card_id));
-
-            let sl = &label[..label.len() - 1];
-
-            let _ = TextOutW(hdc, r.left + 6, r.top + 6, sl);
-        }
-
-        positions.push(r);
-
-        last_idx = Some(i);
-
-        x += if n > 1 { act_width } else { CARD_W };
-    }
-
-    drop(app_snapshot);
-
-    let mut app = app_state().lock().unwrap();
-
-    app.game.hand_positions = positions;
-}
-
 // Classic trick row drawing: absolute positions and region clear
 
-unsafe fn draw_trick_classic(hdc: HDC) {
-    // Clear trick area using classic rectangle
-
-    let n_players = app_state().lock().unwrap().config.num_players as i32;
-
-    let area = RECT {
-        left: 39,
-        top: 54,
-        right: 41 + CARD_W + ((n_players - 1) * 30),
-        bottom: 80 + CARD_H,
-    };
-
-    UI_HANDLES.with(|h| {
-        let br = h.borrow().hbr_green;
-        if br.0 != core::ptr::null_mut() {
-            let _ = FillRect(hdc, &area, br);
-        }
-    });
-
-    SetTextColor(hdc, COLORREF(0x000000));
-
-    let app = app_state().lock().unwrap();
-
-    let n = app.config.num_players as usize;
-
-    if n == 0 {
-        return;
-    }
-
-    let start = app.game.start_player.max(1) as usize; // 1-based in state
-
-    let base = start - 1; // 0-based
-
-    for a in 1..=n {
-        let p = (base + (a - 1)) % n;
-
-        if let Some(Some(card_id)) = app.game.trick.get(p) {
-            if let Some(hbmp) = get_card_bitmap(*card_id) {
-                let x = TRICK_X0 + (TRICK_STEP * (a as i32));
-
-                let y = TRICK_Y;
-
-                blit_card(hdc, hbmp, x, y, false);
-            } else {
-                let x = TRICK_X0 + (TRICK_STEP * (a as i32));
-
-                let y = TRICK_Y;
-
-                dbglog!("Failed to load trick card {}", card_id);
-
-                let _ = GdiRectangle(hdc, x, y, x + CARD_W, y + CARD_H);
-
-                let label = wide(&format!("{}", card_id));
-
-                let sl = &label[..label.len() - 1];
-
-                let _ = TextOutW(hdc, x + 6, y + 6, sl);
-            }
-        }
-
-        // Numeric label beneath on green background
-
-        let lx = 20 + (30 * (a as i32));
-
-        let ly = 65 + CARD_H; // under the row
-
-        let w = wide(&format!("{}", p + 1));
-
-        let sl = &w[..w.len() - 1];
-
-        windows::Win32::Graphics::Gdi::SetBkColor(hdc, COLORREF(128 << 8));
-
-        SetBkMode(hdc, windows::Win32::Graphics::Gdi::OPAQUE);
-
-        let _ = TextOutW(hdc, lx, ly, sl);
-    }
-
-    SetBkMode(hdc, TRANSPARENT);
-}
-
-// Classic exact-size blit with optional invert ROP
-
-unsafe fn blit_card(hdc: HDC, hbmp: HBITMAP, x: i32, y: i32, invert: bool) {
-    let mem = CreateCDC(hdc);
-
-    let old = SelectObj(mem, hbmp);
-
-    let mut bm: BITMAP = std::mem::zeroed();
-
-    let _ = GetObjectW(
-        hbmp,
-        std::mem::size_of::<BITMAP>() as i32,
-        Some(&mut bm as *mut _ as *mut _),
-    );
-
-    let sw = bm.bmWidth;
-    let sh = bm.bmHeight;
-
-    let rop = if invert { NOTSRCCOPY } else { SRCCOPY };
-
-    let _ = BitBlt(hdc, x, y, sw, sh, mem, 0, 0, rop);
-
-    let _ = SelectObj(mem, old);
-
-    let _ = DeleteDc(mem);
-}
-
-unsafe fn draw_hand(hdc: HDC, rc: &RECT, scale: f32) {
-    let card_w = (71.0 * scale) as i32;
-
-    let card_h = (96.0 * scale) as i32;
-
-    let min_overlap = (20.0 * scale) as i32;
-
-    let left_pad = (10.0 * scale) as i32;
-
-    let top_pad = (5.0 * scale) as i32;
-
-    let app_snapshot = app_state().lock().unwrap();
-
-    let n = app_snapshot.game.hand.len();
-
-    if n == 0 {
-        return;
-    }
-
-    let width = rc.right - rc.left;
-
-    let hand_w = width - 2 * left_pad;
-
-    let act_width = if n > 1 {
-        let span = (hand_w - card_w).max(0);
-
-        let w = span / ((n - 1) as i32);
-
-        w.clamp(min_overlap, card_w + (10.0 * scale) as i32)
-    } else {
-        card_w
-    };
-
-    // Prepare brushes
-
-    let white = CreateSolidBrush(COLORREF(0x00FFFFFF));
-
-    let sel_brush = CreateSolidBrush(COLORREF(0x00FFF0AA));
-
-    SetBkMode(hdc, TRANSPARENT);
-
-    SetTextColor(hdc, COLORREF(0x000000));
-
-    let mut positions: Vec<RECT> = Vec::with_capacity(n);
-
-    let mut x = rc.left + left_pad;
-
-    let y = rc.top + top_pad;
-
-    for i in 0..n {
-        let r = RECT {
-            left: x,
-            top: y,
-            right: x + card_w,
-            bottom: y + card_h,
-        };
-
-        // Fill background (highlight selection)
-
-        let sel = app_snapshot.game.selected == Some(i);
-
-        let brush = if sel { sel_brush } else { white };
-
-        FillRect(hdc, &r, brush);
-
-        // Try to draw bitmap if loaded
-
-        let card_id = app_snapshot.game.hand[i];
-
-        if let Some(hbmp) = get_card_bitmap(card_id) {
-            blit_bitmap(hdc, hbmp, r.left, r.top, card_w, card_h);
-        } else {
-            // Border and label fallback
-
-            let _ = GdiRectangle(hdc, r.left, r.top, r.right, r.bottom);
-
-            let label = wide(&format!("{}", card_id));
-
-            let sl = &label[..label.len() - 1];
-
-            let tx = r.left + (8.0 * scale) as i32;
-
-            let ty = r.top + (8.0 * scale) as i32;
-
-            let _ = TextOutW(hdc, tx, ty, sl);
-        }
-
-        positions.push(r);
-
-        x += act_width;
-    }
-
-    drop(app_snapshot);
-
-    // Store positions
-
-    let mut app = app_state().lock().unwrap();
-
-    app.game.hand_positions = positions;
-}
-
-unsafe fn draw_trick(hdc: HDC, rc: &RECT, scale: f32) {
-    let card_w = (71.0 * scale) as i32;
-
-    let card_h = (96.0 * scale) as i32;
-
-    let left_pad = (10.0 * scale) as i32;
-
-    let top_pad = (10.0 * scale) as i32;
-
-    let app = app_state().lock().unwrap();
-
-    let n = app.config.num_players as usize;
-
-    let start = app.game.start_player as usize;
-
-    // Draw in player order starting from start_player
-
-    let base = if start == 0 { 0 } else { start - 1 };
-
-    for idx in 0..n {
-        let p = ((base + idx) % n) as usize;
-
-        if let Some(Some(card_id)) = app.game.trick.get(p) {
-            let x = rc.left + left_pad + (idx as i32) * (card_w + (8.0 * scale) as i32);
-
-            let y = rc.top + top_pad;
-
-            if let Some(hbmp) = get_card_bitmap(*card_id) {
-                blit_bitmap(hdc, hbmp, x, y, card_w, card_h);
-            } else {
-                let white = CreateSolidBrush(COLORREF(0x00FFFFFF));
-
-                let r = RECT {
-                    left: x,
-                    top: y,
-                    right: x + card_w,
-                    bottom: y + card_h,
-                };
-
-                FillRect(hdc, &r, white);
-
-                let _ = GdiRectangle(hdc, r.left, r.top, r.right, r.bottom);
-
-                let label = wide(&format!("{}", card_id));
-
-                let sl = &label[..label.len() - 1];
-
-                let tx = r.left + (8.0 * scale) as i32;
-
-                let ty = r.top + (8.0 * scale) as i32;
-
-                let _ = TextOutW(hdc, tx, ty, sl);
-
-                let _ = DeleteObject(white);
-            }
-
-            // Player label below the card
-
-            let pl = wide(&format!(
-                "P{}{}",
-                p + 1,
-                if app.game.current_player == p {
-                    " <"
-                } else {
-                    ""
-                }
-            ));
-
-            let pls = &pl[..pl.len() - 1];
-
-            let ly = y + card_h + ((6.0 * scale) as i32);
-
-            let _ = TextOutW(hdc, x, ly, pls);
-        }
-    }
-}
-
 // Draw a classic filled 3D box roughly matching Pascal DrawBox
-
-unsafe fn draw_bevel_box(hdc: HDC, rc: RECT) {
-    let black = CreateSolidBrush(COLORREF(0x000000));
-
-    let ltgray = CreateSolidBrush(COLORREF(0x00F0F0F0)); // Match button-face grey
-
-    let dark = CreateSolidBrush(COLORREF(0x00A0A0A0));
-
-    let white = CreateSolidBrush(COLORREF(0x00FFFFFF));
-
-    // Fill interior first
-
-    let mut inner = rc;
-    inner.left += 1;
-    inner.top += 1;
-    inner.right -= 1;
-    inner.bottom -= 1;
-
-    if inner.right > inner.left && inner.bottom > inner.top {
-        let _ = FillRect(hdc, &inner, ltgray);
-    }
-
-    // Outer black frame
-
-    let _ = FrameRect(hdc, &rc, black);
-
-    // Inner dark/light frames for simple 3D effect
-
-    inner.left += 1;
-    inner.top += 1;
-    inner.right -= 1;
-    inner.bottom -= 1;
-
-    if inner.right > inner.left && inner.bottom > inner.top {
-        let _ = FrameRect(hdc, &inner, dark);
-    }
-
-    inner.left += 1;
-    inner.top += 1;
-    inner.right -= 1;
-    inner.bottom -= 1;
-
-    if inner.right > inner.left && inner.bottom > inner.top {
-        let _ = FrameRect(hdc, &inner, white);
-    }
-
-    let _ = DeleteObject(black);
-    let _ = DeleteObject(ltgray);
-    let _ = DeleteObject(dark);
-    let _ = DeleteObject(white);
-}
 
 fn get_xy(lparam: LPARAM) -> (i32, i32) {
     let lp = lparam.0 as u32;
@@ -2340,81 +1364,67 @@ fn get_xy(lparam: LPARAM) -> (i32, i32) {
 
 fn create_default_menu(hwnd: HWND) {
     unsafe {
-        let hmenu = CreateMenu().unwrap();
+        let res = (|| -> windows::core::Result<()> {
+            let hmenu = CreateMenu()?;
+            let game = CreatePopupMenu()?;
+            let helpm = CreatePopupMenu()?;
 
-        let game = CreatePopupMenu().unwrap();
+            // Game menu
+            AppendMenuW(game, MF_STRING, 100, PCWSTR(wide("&Deal").as_ptr()))?;
+            AppendMenuW(game, MF_STRING, 101, PCWSTR(wide("S&cores").as_ptr()))?;
+            AppendMenuW(game, MF_STRING, 102, PCWSTR(wide("&Options...").as_ptr()))?;
+            AppendMenuW(
+                game,
+                MF_STRING,
+                103,
+                PCWSTR(wide("&Random things...").as_ptr()),
+            )?;
+            AppendMenuW(game, MF_SEPARATOR, 0, PCWSTR(std::ptr::null()))?;
+            AppendMenuW(game, MF_STRING, 104, PCWSTR(wide("E&xit").as_ptr()))?;
 
-        let helpm = CreatePopupMenu().unwrap();
+            // Help menu
+            AppendMenuW(helpm, MF_STRING, 900, PCWSTR(wide("&Contents").as_ptr()))?;
+            AppendMenuW(
+                helpm,
+                MF_STRING,
+                901,
+                PCWSTR(wide("Help on &Help").as_ptr()),
+            )?;
+            AppendMenuW(helpm, MF_SEPARATOR, 0, PCWSTR(std::ptr::null()))?;
+            AppendMenuW(
+                helpm,
+                MF_STRING,
+                999,
+                PCWSTR(wide("&About Estimation Whist").as_ptr()),
+            )?;
 
-        // Game menu
+            // Top-level
+            AppendMenuW(
+                hmenu,
+                MF_POPUP,
+                game.0 as usize,
+                PCWSTR(wide("&Game").as_ptr()),
+            )?;
+            AppendMenuW(
+                hmenu,
+                MF_POPUP,
+                helpm.0 as usize,
+                PCWSTR(wide("&Help").as_ptr()),
+            )?;
 
-        let _ = AppendMenuW(game, MF_STRING, 100, PCWSTR(wide("&Deal").as_ptr())).unwrap();
+            SetMenu(hwnd, hmenu)?;
+            Ok(())
+        })();
 
-        let _ = AppendMenuW(game, MF_STRING, 101, PCWSTR(wide("S&cores").as_ptr())).unwrap();
-
-        let _ = AppendMenuW(game, MF_STRING, 102, PCWSTR(wide("&Options...").as_ptr())).unwrap();
-
-        let _ = AppendMenuW(
-            game,
-            MF_STRING,
-            103,
-            PCWSTR(wide("&Random things...").as_ptr()),
-        )
-        .unwrap();
-
-        let _ = AppendMenuW(game, MF_SEPARATOR, 0, PCWSTR(std::ptr::null())).unwrap();
-
-        let _ = AppendMenuW(game, MF_STRING, 104, PCWSTR(wide("E&xit").as_ptr())).unwrap();
-
-        // Help menu
-
-        let _ = AppendMenuW(helpm, MF_STRING, 900, PCWSTR(wide("&Contents").as_ptr())).unwrap();
-
-        let _ = AppendMenuW(
-            helpm,
-            MF_STRING,
-            901,
-            PCWSTR(wide("Help on &Help").as_ptr()),
-        )
-        .unwrap();
-
-        let _ = AppendMenuW(helpm, MF_SEPARATOR, 0, PCWSTR(std::ptr::null())).unwrap();
-
-        let _ = AppendMenuW(
-            helpm,
-            MF_STRING,
-            999,
-            PCWSTR(wide("&About Estimation Whist").as_ptr()),
-        )
-        .unwrap();
-
-        // Top-level
-
-        let _ = AppendMenuW(
-            hmenu,
-            MF_STRING | MF_POPUP,
-            game.0 as usize,
-            PCWSTR(wide("&Game").as_ptr()),
-        )
-        .unwrap();
-
-        let _ = AppendMenuW(
-            hmenu,
-            MF_STRING | MF_POPUP,
-            helpm.0 as usize,
-            PCWSTR(wide("&Help").as_ptr()),
-        )
-        .unwrap();
-
-        let _ = SetMenu(hwnd, hmenu).unwrap();
-
-        let _ = DrawMenuBar(hwnd);
+        if let Err(e) = res {
+            dbglog!("Failed to create menu: {:?}", e);
+        }
     }
 }
 
 fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
     loop {
-        let mut app = app_state().lock().unwrap();
+        let mut app = lock_app_state();
 
         dbglog!(
             "Loop top: start={} cur={} waiting={} trick={:?}",
@@ -2499,7 +1509,7 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
         // Check if trick complete
 
         {
-            let app2 = app_state().lock().unwrap();
+            let app2 = lock_app_state();
 
             if app2.game.trick.iter().filter(|c| c.is_some()).count()
                 == (app2.config.num_players as usize)
@@ -2513,7 +1523,7 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
                 // Pause per option: Dialog shows MB, Mouse waits for click
 
                 let (notify, winner) = {
-                    let a = app_state().lock().unwrap();
+                    let a = lock_app_state();
                     (a.config.next_notify, a.game.last_winner.unwrap_or(0))
                 };
 
@@ -2546,7 +1556,7 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
                     },
 
                     NextNotify::Mouse => {
-                        let mut a = app_state().lock().unwrap();
+                        let mut a = lock_app_state();
 
                         a.game.waiting_for_continue = true;
 
@@ -2565,7 +1575,7 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
 }
 
 fn decide_winner_and_setup() {
-    let mut app = app_state().lock().unwrap();
+    let mut app = lock_app_state();
 
     let n = app.config.num_players as usize;
 
@@ -2596,7 +1606,7 @@ fn decide_winner_and_setup() {
 
 fn handle_click_play(hwnd: HWND, mx: i32, my: i32) {
     {
-        let mut app = app_state().lock().unwrap();
+        let mut app = lock_app_state();
 
         if app.game.waiting_for_continue {
             app.game.waiting_for_continue = false;
@@ -2677,38 +1687,6 @@ fn handle_click_play(hwnd: HWND, mx: i32, my: i32) {
     advance_ai_until_human_or_trick_end(hwnd);
 }
 
-unsafe fn blit_bitmap(hdc: HDC, hbmp: HBITMAP, x: i32, y: i32, w: i32, h: i32) {
-    let mem = CreateCDC(hdc);
-
-    let old = SelectObj(mem, hbmp);
-
-    // Determine source dimensions
-
-    let mut bm: BITMAP = std::mem::zeroed();
-
-    let _ = GetObjectW(
-        hbmp,
-        std::mem::size_of::<BITMAP>() as i32,
-        Some(&mut bm as *mut _ as *mut _),
-    );
-
-    let sw = bm.bmWidth;
-    let sh = bm.bmHeight;
-
-    let oldmode = SetStretchBltMode(hdc, HALFTONE);
-
-    let _ = StretchBlt(hdc, x, y, w, h, mem, 0, 0, sw, sh, SRCCOPY);
-
-    let _ = SetStretchBltMode(
-        hdc,
-        windows::Win32::Graphics::Gdi::STRETCH_BLT_MODE(oldmode),
-    );
-
-    let _ = SelectObj(mem, old);
-
-    let _ = DeleteDc(mem);
-}
-
 // ----- Dialogs (stubs) -----
 
 const IDD_ABOUT: u16 = 3001;
@@ -2725,7 +1703,7 @@ const IDC_LIST_SCORES: u16 = 4010;
 const IDC_CALL_BASE: u16 = 400; // 0..15 (ID_CALLZER through ID_CALLFIF in original)
 
 unsafe fn show_about_dialog(parent: HWND) {
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
 
     DialogBoxParamW(
         hinst,
@@ -2737,7 +1715,7 @@ unsafe fn show_about_dialog(parent: HWND) {
 }
 
 unsafe fn show_options_dialog(parent: HWND) {
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
 
     DialogBoxParamW(
         hinst,
@@ -2749,7 +1727,7 @@ unsafe fn show_options_dialog(parent: HWND) {
 }
 
 unsafe fn show_scores_dialog(parent: HWND) {
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
 
     DialogBoxParamW(
         hinst,
@@ -2772,7 +1750,7 @@ unsafe fn register_cheat_window_class(hinstance: HMODULE) -> windows::core::Resu
         cbWndExtra: 0,
         hInstance: hinstance.into(),
         hIcon: HICON::default(),
-        hCursor: LoadCursorW(None, IDC_ARROW).unwrap(),
+        hCursor: LoadCursorW(None, IDC_ARROW)?,
         hbrBackground: HBRUSH(std::ptr::null_mut()),
         lpszMenuName: PCWSTR::null(),
         lpszClassName: PCWSTR(class_name.as_ptr()),
@@ -2793,7 +1771,7 @@ unsafe fn create_cheat_cards_window(parent_hwnd: HWND) -> windows::core::Result<
 
     // Get offset from app state
     let (offset_x, offset_y) = {
-        let app = app_state().lock().unwrap();
+        let app = lock_app_state();
         (app.cheat_window.offset_x, app.cheat_window.offset_y)
     };
 
@@ -2822,13 +1800,13 @@ unsafe fn create_cheat_cards_window(parent_hwnd: HWND) -> windows::core::Result<
         None,
     )?;
 
-    app_state().lock().unwrap().cheat_window.hwnd = Some(hwnd.0 as isize);
+    lock_app_state().cheat_window.hwnd = Some(hwnd.0 as isize);
     Ok(hwnd)
 }
 
 unsafe fn close_cheat_cards_window() {
     let hwnd_opt = {
-        let app = app_state().lock().unwrap();
+        let app = lock_app_state();
         app.cheat_window.hwnd
     };
 
@@ -2859,7 +1837,7 @@ unsafe extern "system" fn cheat_window_proc(
                     if GetWindowRect(parent, &mut parent_rect).is_ok()
                         && GetWindowRect(hwnd, &mut cheat_rect).is_ok()
                     {
-                        let mut app = app_state().lock().unwrap();
+                        let mut app = lock_app_state();
                         app.cheat_window.offset_x = cheat_rect.left - parent_rect.left;
                         app.cheat_window.offset_y = cheat_rect.top - parent_rect.top;
                     }
@@ -2869,7 +1847,7 @@ unsafe extern "system" fn cheat_window_proc(
 
         WM_CLOSE => {
             // User explicitly closed the window - disable the option
-            app_state().lock().unwrap().config.cheat_cards = false;
+            lock_app_state().config.cheat_cards = false;
             let _ = DestroyWindow(hwnd);
             return LRESULT(0);
         }
@@ -2883,14 +1861,14 @@ unsafe extern "system" fn cheat_window_proc(
                     if GetWindowRect(parent, &mut parent_rect).is_ok()
                         && GetWindowRect(hwnd, &mut cheat_rect).is_ok()
                     {
-                        let mut app = app_state().lock().unwrap();
+                        let mut app = lock_app_state();
                         app.cheat_window.offset_x = cheat_rect.left - parent_rect.left;
                         app.cheat_window.offset_y = cheat_rect.top - parent_rect.top;
                     }
                 }
             }
 
-            let mut app = app_state().lock().unwrap();
+            let mut app = lock_app_state();
             app.cheat_window.hwnd = None;
 
             return LRESULT(0);
@@ -2907,7 +1885,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
     let hdc = BeginPaint(hwnd, &mut ps);
 
     let (hands, num_players, dpi) = {
-        let app = app_state().lock().unwrap();
+        let app = lock_app_state();
         (
             app.game.hands.clone(),
             app.game.hands.len(),
@@ -2978,7 +1956,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
         let card_y = (4.0 * scale).round() as i32 + y_increment * row_index as i32;
 
         let player_text = player_number.to_string();
-        let player_wide = wide(&player_text);
+        let player_wide = rendering::wide(&player_text);
         let _ = TextOutW(
             hdc,
             (10.0 * scale).round() as i32,
@@ -2991,7 +1969,7 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
             if card_id > 0 {
                 let card_x = (30.0 * scale).round() as i32 + card_index * act_width;
 
-                draw_card_scaled(
+                rendering::draw_card_scaled(
                     hdc,
                     card_x,
                     card_y,
@@ -3008,43 +1986,9 @@ unsafe fn draw_cheat_cards(hwnd: HWND) {
     let _ = EndPaint(hwnd, &ps);
 }
 
-unsafe fn draw_card_scaled(
-    hdc: HDC,
-    x: i32,
-    y: i32,
-    card_id: u32,
-    dest_width: i32,
-    dest_height: i32,
-) {
-    let hbmp = match get_card_bitmap(card_id) {
-        Some(bmp) => bmp,
-        None => return,
-    };
-
-    let memdc = CreateCompatibleDC(hdc);
-    let old_bmp = SelectObject(memdc, hbmp);
-
-    let _ = StretchBlt(
-        hdc,
-        x,
-        y,
-        dest_width,
-        dest_height,
-        memdc,
-        0,
-        0,
-        CARD_W,
-        CARD_H,
-        SRCCOPY,
-    );
-
-    SelectObject(memdc, old_bmp);
-    let _ = DeleteDC(memdc);
-}
-
 unsafe fn update_cheat_cards_window() {
     let hwnd_opt = {
-        let app = app_state().lock().unwrap();
+        let app = lock_app_state();
         app.cheat_window.hwnd
     };
 
@@ -3056,7 +2000,7 @@ unsafe fn update_cheat_cards_window() {
 
 unsafe fn cleanup_cheat_window() {
     let hwnd_opt = {
-        let app = app_state().lock().unwrap();
+        let app = lock_app_state();
         app.cheat_window.hwnd
     };
 
@@ -3071,7 +2015,7 @@ unsafe fn cleanup_cheat_window() {
                 if GetWindowRect(parent, &mut parent_rect).is_ok()
                     && GetWindowRect(hwnd, &mut cheat_rect).is_ok()
                 {
-                    let mut app = app_state().lock().unwrap();
+                    let mut app = lock_app_state();
                     app.cheat_window.offset_x = cheat_rect.left - parent_rect.left;
                     app.cheat_window.offset_y = cheat_rect.top - parent_rect.top;
                 }
@@ -3082,14 +2026,14 @@ unsafe fn cleanup_cheat_window() {
     }
 
     {
-        let app = app_state().lock().unwrap();
+        let app = lock_app_state();
         save_config_to_registry(&app.config);
         save_cheat_window_state(&app.cheat_window);
     }
 }
 
 unsafe fn show_call_dialog(parent: HWND) -> i32 {
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
 
     let ret = DialogBoxParamW(
         hinst,
@@ -3106,13 +2050,13 @@ unsafe fn show_call_dialog(parent: HWND) -> i32 {
 
 fn run_bidding(hwnd: HWND) {
     unsafe {
-        let n = app_state().lock().unwrap().config.num_players as usize;
+        let n = lock_app_state().config.num_players as usize;
 
-        let no_cards = app_state().lock().unwrap().game.dealt_cards as u32;
+        let no_cards = lock_app_state().game.dealt_cards as u32;
 
         // Bidding order starts at StartPlayer and wraps; human is seat 0
 
-        let sp1 = app_state().lock().unwrap().game.start_player as usize; // 1-based
+        let sp1 = lock_app_state().game.start_player as usize; // 1-based
 
         let start = if sp1 == 0 { 0 } else { sp1 - 1 };
 
@@ -3133,7 +2077,7 @@ fn run_bidding(hwnd: HWND) {
             if seat == 0 {
                 // Human call
 
-                let mut app = app_state().lock().unwrap();
+                let mut app = lock_app_state();
 
                 app.game.bidding_forbidden = if is_last {
                     Some(no_cards.saturating_sub(sum_so_far))
@@ -3145,7 +2089,7 @@ fn run_bidding(hwnd: HWND) {
 
                 let sel = show_call_dialog(hwnd);
 
-                let mut app2 = app_state().lock().unwrap();
+                let mut app2 = lock_app_state();
 
                 let mut call = if sel < 0 { 0 } else { sel as u32 };
 
@@ -3176,14 +2120,14 @@ fn run_bidding(hwnd: HWND) {
                 );
             } else {
                 // Simple AI call
-                let app = app_state().lock().unwrap();
+                let app = lock_app_state();
                 let hand = app.game.hands[seat].clone();
                 let trump = app.game.trump;
                 drop(app);
 
                 let call = calculate_bid(&hand, trump, no_cards, sum_so_far, is_last);
 
-                let mut app2 = app_state().lock().unwrap();
+                let mut app2 = lock_app_state();
                 app2.game.calls[seat] = call;
                 sum_so_far += call;
 
@@ -3220,20 +2164,12 @@ extern "system" fn about_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam:
     }
 }
 
-// Calculate maximum cards allowed based on number of players
-// Standard deck has 52 cards, so max cards = floor(52 / num_players)
-// But never exceed 15 cards per player
-fn calc_max_cards_for_players(num_players: u32) -> u32 {
-    let max_from_deck = 52 / num_players;
-    max_from_deck.min(15)
-}
-
 extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> isize {
     unsafe {
         match msg {
             WM_INITDIALOG => {
                 // Populate from current config
-                let cfg = app_state().lock().unwrap().config.clone();
+                let cfg = lock_app_state().config.clone();
 
                 // Initialize scrollbar for number of players (2-6)
                 SendDlgItemMessageW(hwnd, 4001, SBM_SETRANGE, WPARAM(2), LPARAM(6));
@@ -3328,8 +2264,8 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                 let scroll_code = loword(wparam.0 as u32) as i32;
 
                 // Determine which scrollbar was moved
-                let sb_players = GetDlgItem(hwnd, 4001).unwrap();
-                let sb_cards = GetDlgItem(hwnd, 4002).unwrap();
+                let sb_players = GetDlgItem(hwnd, 4001).unwrap_or_default();
+                let sb_cards = GetDlgItem(hwnd, 4002).unwrap_or_default();
 
                 if hwnd_scrollbar == sb_players {
                     // Players scrollbar changed
@@ -3474,7 +2410,7 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
                             as usize
                             == BST_CHECKED_U;
 
-                    let mut state = app_state().lock().unwrap();
+                    let mut state = lock_app_state();
 
                     state.config = UiConfig {
                         num_players,
@@ -3487,7 +2423,7 @@ extern "system" fn options_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam
 
                     drop(state);
 
-                    save_config_to_registry(&app_state().lock().unwrap().config);
+                    save_config_to_registry(&lock_app_state().config);
 
                     let _ = EndDialog(hwnd, 1);
 
@@ -3555,7 +2491,7 @@ extern "system" fn call_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: 
             WM_INITDIALOG => {
                 // Disable invalid call buttons beyond dealt_cards and, if present, the forbidden value
 
-                let app = app_state().lock().unwrap();
+                let app = lock_app_state();
 
                 let maxc = app.game.dealt_cards;
 
@@ -3564,20 +2500,23 @@ extern "system" fn call_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, _lparam: 
                 drop(app);
 
                 for v in 0..=15 {
-                    let child = GetDlgItem(hwnd, (IDC_CALL_BASE + v as u16) as i32).unwrap();
+                    let child =
+                        GetDlgItem(hwnd, (IDC_CALL_BASE + v as u16) as i32).unwrap_or_default();
 
                     let _ = EnableWindow(child, BOOL(1));
                 }
 
                 for v in (maxc + 1)..=15 {
-                    let child = GetDlgItem(hwnd, (IDC_CALL_BASE + v as u16) as i32).unwrap();
+                    let child =
+                        GetDlgItem(hwnd, (IDC_CALL_BASE + v as u16) as i32).unwrap_or_default();
 
                     let _ = EnableWindow(child, BOOL(0));
                 }
 
                 if let Some(fv) = forbid {
                     if fv <= 15 {
-                        let child = GetDlgItem(hwnd, (IDC_CALL_BASE + fv as u16) as i32).unwrap();
+                        let child = GetDlgItem(hwnd, (IDC_CALL_BASE + fv as u16) as i32)
+                            .unwrap_or_default();
 
                         let _ = EnableWindow(child, BOOL(0));
                     }
@@ -3609,9 +2548,9 @@ extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
     unsafe {
         match msg {
             WM_INITDIALOG => {
-                let app = app_state().lock().unwrap();
+                let app = lock_app_state();
                 let cfg = &app.random_things.config;
-                let mult_sb = GetDlgItem(hwnd, IDC_RNDMULTSC).unwrap();
+                let mult_sb = GetDlgItem(hwnd, IDC_RNDMULTSC).unwrap_or_default();
                 let _ = SendMessageW(mult_sb, SBM_SETRANGE, WPARAM(1), LPARAM(20));
                 let _ = SendMessageW(
                     mult_sb,
@@ -3619,10 +2558,10 @@ extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                     WPARAM(cfg.multiplier as usize),
                     LPARAM(1),
                 );
-                let numb_sb = GetDlgItem(hwnd, IDC_RNDNUMBSC).unwrap();
+                let numb_sb = GetDlgItem(hwnd, IDC_RNDNUMBSC).unwrap_or_default();
                 let _ = SendMessageW(numb_sb, SBM_SETRANGE, WPARAM(1), LPARAM(4));
                 let _ = SendMessageW(numb_sb, SBM_SETPOS, WPARAM(cfg.count), LPARAM(1));
-                let time_sb = GetDlgItem(hwnd, IDC_RNDTIMESC).unwrap();
+                let time_sb = GetDlgItem(hwnd, IDC_RNDTIMESC).unwrap_or_default();
                 let _ = SendMessageW(time_sb, SBM_SETRANGE, WPARAM(20), LPARAM(1000));
                 let _ = SendMessageW(
                     time_sb,
@@ -3720,14 +2659,14 @@ extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                 match id {
                     1 => {
                         // IDOK
-                        let main_hwnd = GetParent(hwnd).unwrap();
-                        let mult_sb = GetDlgItem(hwnd, IDC_RNDMULTSC).unwrap();
+                        let main_hwnd = GetParent(hwnd).unwrap_or_default();
+                        let mult_sb = GetDlgItem(hwnd, IDC_RNDMULTSC).unwrap_or_default();
                         let multiplier =
                             SendMessageW(mult_sb, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as i32;
-                        let numb_sb = GetDlgItem(hwnd, IDC_RNDNUMBSC).unwrap();
+                        let numb_sb = GetDlgItem(hwnd, IDC_RNDNUMBSC).unwrap_or_default();
                         let count =
                             SendMessageW(numb_sb, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as usize;
-                        let time_sb = GetDlgItem(hwnd, IDC_RNDTIMESC).unwrap();
+                        let time_sb = GetDlgItem(hwnd, IDC_RNDTIMESC).unwrap_or_default();
                         let interval_ms =
                             SendMessageW(time_sb, SBM_GETPOS, WPARAM(0), LPARAM(0)).0 as u32;
                         let enabled = SendDlgItemMessageW(
@@ -3749,7 +2688,7 @@ extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                         .0 as usize
                             == BST_CHECKED_U;
                         {
-                            let mut app = app_state().lock().unwrap();
+                            let mut app = lock_app_state();
                             let old_interval = app.random_things.config.interval_ms;
                             let old_enabled = app.random_things.config.enabled;
                             let old_count = app.random_things.config.count;
@@ -3770,11 +2709,11 @@ extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
                                 if enabled && !app.game.in_progress {
                                     drop(app);
                                     start_random_things(main_hwnd);
-                                    app = app_state().lock().unwrap();
+                                    app = lock_app_state();
                                 } else if !enabled {
                                     drop(app);
                                     stop_random_things(main_hwnd);
-                                    app = app_state().lock().unwrap();
+                                    app = lock_app_state();
                                 }
                             }
                             if (count != old_count) || (enabled && !old_enabled) {
@@ -3809,7 +2748,7 @@ extern "system" fn random_dlg_proc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam:
 }
 
 unsafe fn show_random_things_dialog(parent: HWND) {
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
     let _ = DialogBoxParamW(
         hinst,
         make_int_resource(3006),
@@ -3906,6 +2845,14 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
         NAME_BUF.get_or_init(|| Mutex::new(String::new()))
     }
 
+    // Helper: Safe access to name buffer
+    fn lock_name_buf() -> MutexGuard<'static, String> {
+        match name_buf().lock() {
+            Ok(guard) => guard,
+            Err(poisoned) => poisoned.into_inner(),
+        }
+    }
+
     extern "system" fn name_dlg_proc(
         hwnd: HWND,
         msg: u32,
@@ -3943,7 +2890,7 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
                                 .take_while(|&c| c != 0)
                                 .collect::<Vec<u16>>(),
                         ) {
-                            *name_buf().lock().unwrap() = s;
+                            *lock_name_buf() = s;
                         }
 
                         let _ = EndDialog(hwnd, 1);
@@ -3964,7 +2911,7 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
         }
     }
 
-    let hinst = GetModuleHandleW(None).unwrap();
+    let hinst = get_hinstance();
 
     let ret = DialogBoxParamW(
         hinst,
@@ -3975,7 +2922,7 @@ unsafe fn show_name_dialog(parent: HWND) -> Option<String> {
     );
 
     if ret == 1 {
-        let s = name_buf().lock().unwrap().clone();
+        let s = lock_name_buf().clone();
 
         if s.trim().is_empty() {
             None

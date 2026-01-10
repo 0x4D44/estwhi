@@ -24,6 +24,21 @@ pub fn validate_max_cards(n: u32) -> u32 {
     n.clamp(1, 15)
 }
 
+/// Calculates the maximum allowed cards based on number of players.
+///
+/// # Arguments
+/// * `num_players` - Number of players (2-6).
+///
+/// # Returns
+/// The maximum number of cards that can be dealt (floor(52 / num_players)), clamped to 15.
+pub fn calc_max_cards_for_players(num_players: u32) -> u32 {
+    if num_players == 0 {
+        return 15;
+    }
+    let max_from_deck = 52 / num_players;
+    max_from_deck.min(15)
+}
+
 /// Parses score mode from integer representation.
 ///
 /// # Arguments
@@ -54,6 +69,15 @@ mod tests {
         assert_eq!(validate_players(2), 2);
         assert_eq!(validate_players(6), 6);
         assert_eq!(validate_players(100), 6);
+    }
+
+    #[test]
+    fn max_cards_calculation() {
+        assert_eq!(calc_max_cards_for_players(0), 15); // Safety check
+        assert_eq!(calc_max_cards_for_players(4), 13); // 52 / 4 = 13
+        assert_eq!(calc_max_cards_for_players(3), 15); // 52 / 3 = 17 -> clamp 15
+        assert_eq!(calc_max_cards_for_players(2), 15); // 52 / 2 = 26 -> clamp 15
+        assert_eq!(calc_max_cards_for_players(6), 8); // 52 / 6 = 8
     }
 
     #[test]

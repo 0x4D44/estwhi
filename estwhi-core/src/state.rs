@@ -55,6 +55,33 @@ pub fn next_start_player(current_start: u32, num_players: u32) -> u32 {
     }
 }
 
+/// Determines which player (0-based index) should act next in the current trick.
+///
+/// # Arguments
+/// * `start_player` - The player who led the trick (1-based).
+/// * `trick` - The current trick state (vector of options, where None means not played).
+///
+/// # Returns
+/// * `Some(index)` - The 0-based index of the next player to act.
+/// * `None` - If the trick is full or invalid (empty).
+pub fn next_player_to_act(start_player: u32, trick: &[Option<u32>]) -> Option<usize> {
+    let n = trick.len();
+    if n == 0 {
+        return None;
+    }
+    // Convert 1-based start_player to 0-based index
+    let start0 = start_player.saturating_sub(1) as usize;
+
+    // Check slots in turn order
+    for i in 0..n {
+        let p = (start0 + i) % n;
+        if trick[p].is_none() {
+            return Some(p);
+        }
+    }
+    None
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -76,6 +103,7 @@ mod tests {
         assert_eq!(next_trump(0), 1);
         assert_eq!(next_trump(1), 2);
         assert_eq!(next_trump(4), 1);
+        assert_eq!(next_trump(5), 1); // Boundary > 4
     }
 
     #[test]
@@ -84,5 +112,38 @@ mod tests {
         assert_eq!(next_start_player(0, n), 1);
         assert_eq!(next_start_player(1, n), 2);
         assert_eq!(next_start_player(4, n), 1);
+        assert_eq!(next_start_player(5, n), 1); // Boundary > n
+    }
+
+    #[test]
+    fn next_player_logic() {
+        // 4 players, start player 1
+        let trick_empty = vec![None, None, None, None];
+        assert_eq!(next_player_to_act(1, &trick_empty), Some(0));
+
+        // Player 1 played
+        let trick_p1 = vec![Some(1), None, None, None];
+        assert_eq!(next_player_to_act(1, &trick_p1), Some(1));
+
+        // Player 1 and 2 played
+        let trick_p12 = vec![Some(1), Some(2), None, None];
+        assert_eq!(next_player_to_act(1, &trick_p12), Some(2));
+
+        // Full trick
+        let trick_full = vec![Some(1), Some(2), Some(3), Some(4)];
+        assert_eq!(next_player_to_act(1, &trick_full), None);
+
+        // Start player 3 (index 2)
+        // Order: 2, 3, 0, 1
+        assert_eq!(next_player_to_act(3, &trick_empty), Some(2));
+
+        let trick_p3 = vec![None, None, Some(1), None];
+        assert_eq!(next_player_to_act(3, &trick_p3), Some(3));
+
+        let trick_p34 = vec![None, None, Some(1), Some(2)];
+        assert_eq!(next_player_to_act(3, &trick_p34), Some(0));
+
+        // Edge case: Empty trick vec
+        assert_eq!(next_player_to_act(1, &[]), None);
     }
 }
