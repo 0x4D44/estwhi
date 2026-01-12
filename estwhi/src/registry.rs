@@ -295,4 +295,22 @@ mod tests {
         // Ensure no override is set for this test
         assert_eq!(resolve_key("MyDefault"), "MyDefault");
     }
+
+    #[test]
+    fn test_resolve_key_overrides() {
+        // Test override logic
+        let override_key = "Software\\Estwhi\\TestOverride";
+
+        with_test_key(override_key, || {
+            // SUBKEY should resolve to override
+            assert_eq!(resolve_key(SUBKEY), override_key);
+
+            // RT_SUBKEY should resolve to override + "\\Random Things"
+            let expected_rt = format!("{}\\Random Things", override_key);
+            assert_eq!(resolve_key(RT_SUBKEY), expected_rt);
+
+            // Other keys should remain unchanged
+            assert_eq!(resolve_key("Other"), "Other");
+        });
+    }
 }

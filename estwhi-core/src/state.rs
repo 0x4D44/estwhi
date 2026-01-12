@@ -104,6 +104,7 @@ mod tests {
         assert_eq!(next_trump(1), 2);
         assert_eq!(next_trump(4), 1);
         assert_eq!(next_trump(5), 1); // Boundary > 4
+        assert_eq!(next_trump(100), 1); // Far boundary
     }
 
     #[test]
@@ -113,6 +114,7 @@ mod tests {
         assert_eq!(next_start_player(1, n), 2);
         assert_eq!(next_start_player(4, n), 1);
         assert_eq!(next_start_player(5, n), 1); // Boundary > n
+        assert_eq!(next_start_player(100, n), 1); // Far boundary
     }
 
     #[test]

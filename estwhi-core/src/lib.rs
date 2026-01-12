@@ -578,6 +578,24 @@ mod tests {
         // Incomplete trick (has None)
         let trick = vec![Some(1), None, Some(2)];
         assert!(decide_trick_winner(&trick, 1).is_none());
+
+        // Trick with all None
+        let trick_all_none = vec![None, None, None, None];
+        assert!(decide_trick_winner(&trick_all_none, 1).is_none());
+    }
+
+    #[test]
+    fn trick_winner_no_candidates() {
+        // This is theoretically impossible with valid cards if the list is non-empty,
+        // because at least the first card sets the lead suit and is a candidate.
+        // However, to cover the `candidates.is_empty()` check:
+        // We need a scenario where `trump_cards` is empty AND `played.filter(lead)` is empty.
+        // But `played[0]` DEFINES the lead suit, so it is always in the filter.
+        // So `candidates` can only be empty if `played` is empty, which is covered by the initial check.
+        // The only way to hit that line is if logic changes or `played` filtering is bugged.
+        // But we can verify normal behavior.
+        let trick = vec![Some(1)];
+        assert_eq!(decide_trick_winner(&trick, 2).unwrap(), 0);
     }
 
     #[test]

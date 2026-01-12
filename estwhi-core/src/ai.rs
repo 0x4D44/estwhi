@@ -179,6 +179,27 @@ mod tests {
     }
 
     #[test]
+    fn bid_calculation_individual_ranks() {
+        // Test specific ranks in isolation to ensure match arms are hit
+        // Queen (12) -> 0.6. Rounds to 1.
+        let hand_q = vec![12];
+        assert_eq!(calculate_bid(&hand_q, 2, 1, 0, false), 1);
+
+        // Jack (11) -> 0.5. Rounds to 1 (round_ties_even/away_from_zero? f32::round rounds to nearest, ties away from zero usually)
+        // 0.5 rounds to 1.
+        let hand_j = vec![11];
+        assert_eq!(calculate_bid(&hand_j, 2, 1, 0, false), 1);
+
+        // Ten (10) -> 0.4. Rounds to 0.
+        let hand_t = vec![10];
+        assert_eq!(calculate_bid(&hand_t, 2, 1, 0, false), 0);
+
+        // Nine (9) -> 0.0.
+        let hand_9 = vec![9];
+        assert_eq!(calculate_bid(&hand_9, 2, 1, 0, false), 0);
+    }
+
+    #[test]
     fn bid_calculation_clamp() {
         // Hand estimates 10, but only 5 cards dealt
         let hand = vec![1; 10]; // 10 Aces

@@ -118,3 +118,71 @@ pub fn save_random_things_config(cfg: &RandomThingsConfig) {
     let _ = registry::rt_set_u32("They exist", if cfg.enabled { 1 } else { 0 });
     let _ = registry::rt_set_u32("Icon twirl", if cfg.icon_twirl_enabled { 1 } else { 0 });
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::registry;
+
+    #[test]
+    fn test_config_roundtrip() {
+        let key = format!("Software\\Estwhi\\TestConfig_{}", rand::random::<u32>());
+
+        registry::with_test_key(&key, || {
+            let cfg = UiConfig {
+                num_players: 3,
+                score_mode: ScoreMode::Squared,
+                confirm_exit: false,
+                ..Default::default()
+            };
+
+            save_config_to_registry(&cfg);
+
+            let loaded = load_config_from_registry();
+            assert_eq!(loaded.num_players, 3);
+            assert_eq!(loaded.score_mode, ScoreMode::Squared);
+            assert!(!loaded.confirm_exit);
+
+            // Default check
+            assert_eq!(loaded.max_cards, 13);
+        });
+    }
+
+    #[test]
+    fn test_random_things_roundtrip() {
+        let key = format!("Software\\Estwhi\\TestRT_{}", rand::random::<u32>());
+
+        registry::with_test_key(&key, || {
+            let cfg = RandomThingsConfig {
+                multiplier: 15,
+                enabled: false,
+                ..Default::default()
+            };
+
+            save_random_things_config(&cfg);
+
+            let loaded = load_random_things_config();
+            assert_eq!(loaded.multiplier, 15);
+            assert!(!loaded.enabled);
+        });
+    }
+
+    #[test]
+    fn test_cheat_window_state_roundtrip() {
+        let key = format!("Software\\Estwhi\\TestCheat_{}", rand::random::<u32>());
+
+        registry::with_test_key(&key, || {
+            let state = CheatWindowState {
+                hwnd: None,
+                offset_x: 123,
+                offset_y: 456,
+            };
+
+            save_cheat_window_state(&state);
+
+            let loaded = load_cheat_window_state();
+            assert_eq!(loaded.offset_x, 123);
+            assert_eq!(loaded.offset_y, 456);
+        });
+    }
+}

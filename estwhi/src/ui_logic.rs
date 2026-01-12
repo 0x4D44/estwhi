@@ -173,4 +173,59 @@ mod tests {
         things.resize_things(1000, 1000);
         assert_eq!(things.things.len(), 1);
     }
+
+    #[test]
+    fn test_update_positions_bounds() {
+        let mut things = RandomThings::default();
+        things.config.multiplier = 10; // Large steps
+        things.things.push(RandomThingState {
+            x: 0,
+            y: 0,
+            bitmap_index: 0,
+        });
+
+        let bounds = (0, 0, 100, 100);
+        let logo = (-100, -100, -50, -50); // Far away
+        let thing_size = 10;
+
+        let mut rng = rand::thread_rng();
+
+        // Run updates
+        for _ in 0..100 {
+            things.update_positions(bounds, logo, thing_size, &mut rng);
+            let t = &things.things[0];
+            // Verify bounds
+            assert!(t.x >= bounds.0);
+            assert!(t.x <= bounds.2 - thing_size);
+            assert!(t.y >= bounds.1);
+            assert!(t.y <= bounds.3 - thing_size);
+        }
+    }
+
+    #[test]
+    fn test_update_positions_collision() {
+        let mut things = RandomThings::default();
+        things.config.multiplier = 1;
+        // Place thing inside logo rect
+        let logo = (50, 50, 100, 100);
+        // Center of logo zone is approx 50 + 31 = 81.
+        // 75 is < 81, so it should snap left/top.
+        things.things.push(RandomThingState {
+            x: 75,
+            y: 75,
+            bitmap_index: 0,
+        });
+
+        let bounds = (0, 0, 200, 200);
+        let thing_size = 10;
+        let mut rng = rand::thread_rng();
+
+        things.update_positions(bounds, logo, thing_size, &mut rng);
+
+        let t = &things.things[0];
+        // The logic snaps to the edge. Since collision check is inclusive, it remains "on" the edge.
+        // We verify it moved to the expected corner.
+        assert_eq!(t.x, 50);
+        assert_eq!(t.y, 50);
+    }
 }

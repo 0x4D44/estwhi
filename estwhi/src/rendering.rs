@@ -361,6 +361,53 @@ pub unsafe fn draw_extra_info(hdc: HDC, rc: &RECT, max_cards: u32, game: &GameSt
     SetBkMode(hdc, TRANSPARENT);
 }
 
+pub fn calculate_hand_layout(num_cards: usize) -> Vec<RECT> {
+    if num_cards == 0 {
+        return Vec::new();
+    }
+
+    let act_width = if num_cards > 1 {
+        let mut w = (HAND_SPAN_X - CARD_W) / ((num_cards - 1) as i32);
+        if w > (CARD_W + 10) {
+            w = CARD_W + 10;
+        }
+        w
+    } else {
+        CARD_W
+    };
+
+    // Note: MessageBox for too small window is a UI side effect,
+    // we'll leave it in the draw function or return an error/empty here?
+    // For pure logic, we just return the rects. The caller decides if they are too squeezed.
+
+    let mut positions: Vec<RECT> = Vec::with_capacity(num_cards);
+    let mut x = HAND_X0;
+    let y = HAND_Y;
+    let mut last_idx: Option<usize> = None;
+
+    for i in 0..num_cards {
+        let r = RECT {
+            left: x,
+            top: y,
+            right: x + CARD_W,
+            bottom: y + CARD_H,
+        };
+
+        if let Some(pi) = last_idx {
+            if act_width < CARD_W {
+                if let Some(prev) = positions.get_mut(pi) {
+                    prev.right = prev.left + act_width;
+                }
+            }
+        }
+
+        positions.push(r);
+        last_idx = Some(i);
+        x += if num_cards > 1 { act_width } else { CARD_W };
+    }
+    positions
+}
+
 pub unsafe fn draw_hand_classic(hdc: HDC, game: &GameState) -> Vec<RECT> {
     let n = game.hand.len();
 
@@ -368,7 +415,12 @@ pub unsafe fn draw_hand_classic(hdc: HDC, game: &GameState) -> Vec<RECT> {
         return Vec::new();
     }
 
+    let positions = calculate_hand_layout(n);
+
+    // Check min width constraint check (legacy logic)
     let act_width = if n > 1 {
+        // Re-calculate or derive from positions?
+        // Let's just re-calculate for the check
         let mut w = (HAND_SPAN_X - CARD_W) / ((n - 1) as i32);
         if w > (CARD_W + 10) {
             w = CARD_W + 10;
@@ -391,27 +443,7 @@ pub unsafe fn draw_hand_classic(hdc: HDC, game: &GameState) -> Vec<RECT> {
     SetBkMode(hdc, TRANSPARENT);
     SetTextColor(hdc, COLORREF(0x000000));
 
-    let mut positions: Vec<RECT> = Vec::with_capacity(n);
-    let mut x = HAND_X0;
-    let y = HAND_Y;
-    let mut last_idx: Option<usize> = None;
-
-    for i in 0..n {
-        let r = RECT {
-            left: x,
-            top: y,
-            right: x + CARD_W,
-            bottom: y + CARD_H,
-        };
-
-        if let Some(pi) = last_idx {
-            if act_width < CARD_W {
-                if let Some(prev) = positions.get_mut(pi) {
-                    prev.right = prev.left + act_width;
-                }
-            }
-        }
-
+    for (i, r) in positions.iter().enumerate() {
         let card_id = game.hand[i];
         let legal = is_legal_play(card_id, &game.trick, &game.hand);
 
@@ -423,10 +455,6 @@ pub unsafe fn draw_hand_classic(hdc: HDC, game: &GameState) -> Vec<RECT> {
             let sl = &label[..label.len() - 1];
             let _ = TextOutW(hdc, r.left + 6, r.top + 6, sl);
         }
-
-        positions.push(r);
-        last_idx = Some(i);
-        x += if n > 1 { act_width } else { CARD_W };
     }
     positions
 }
@@ -527,4 +555,42 @@ pub unsafe fn draw_card_scaled(
 
     let _ = SelectObject(memdc, old_bmp);
     let _ = DeleteDC(memdc);
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_hand_layout_empty() {
+        assert!(calculate_hand_layout(0).is_empty());
+    }
+
+    #[test]
+    fn test_hand_layout_single() {
+        let rects = calculate_hand_layout(1);
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].left, HAND_X0);
+        assert_eq!(rects[0].right, HAND_X0 + CARD_W);
+    }
+
+    #[test]
+    fn test_hand_layout_full() {
+        let rects = calculate_hand_layout(13);
+        assert_eq!(rects.len(), 13);
+        // Verify overlap logic (previous rect right side is adjusted)
+        // Except for the last one
+        let first = rects[0];
+        let second = rects[1];
+        // act_width for 13 cards: (500 - 71) / 12 = 429 / 12 = 35.
+        // CARD_W is 71. So they overlap.
+        // first.right should be first.left + 35 = 10 + 35 = 45.
+        // Original logic: "prev.right = prev.left + act_width"
+        assert_eq!(first.right - first.left, 35);
+        assert_eq!(second.left, first.left + 35);
+
+        // Last card should be full width
+        let last = rects[12];
+        assert_eq!(last.right - last.left, CARD_W);
+    }
 }

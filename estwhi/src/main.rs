@@ -37,9 +37,9 @@ use windows::Win32::UI::Controls::InitCommonControls;
 use std::sync::{Mutex, OnceLock};
 
 use estwhi_core::{
-    ai::{calculate_bid, select_card_to_play},
+    ai::calculate_bid,
     config::calc_max_cards_for_players,
-    decide_trick_winner, is_legal_play, score_hand, sort_hand_for_display,
+    decide_trick_winner, is_legal_play, sort_hand_for_display,
     state::{cards_to_deal, next_player_to_act, next_start_player, next_trump},
     Deck, ScoreMode,
 };
@@ -49,11 +49,13 @@ use rand::prelude::*;
 use std::cell::RefCell;
 
 mod game_config;
+mod game_controller;
 mod game_state;
 mod registry;
 mod rendering;
 mod ui_logic;
 use game_config::*;
+use game_controller::*;
 use game_state::*;
 use rendering::*;
 use ui_logic::*;
@@ -1195,157 +1197,90 @@ extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM)
 // Returns true if the hand ended (and next round started or game ended).
 
 fn finalize_trick_and_setup_next(hwnd: HWND) -> bool {
-    // Hold one lock across logic to avoid races
+    let (res, best_score, human_best) = {
+        let mut app_guard = lock_app_state();
+        let app = &mut *app_guard;
+        let res = finalize_trick(&mut app.game, &app.config);
 
-    let mut app = lock_app_state();
-
-    // Clear trick and decrement remaining
-
-    for c in app.game.trick.iter_mut() {
-        *c = None;
-    }
-
-    if app.game.cards_remaining > 0 {
-        app.game.cards_remaining -= 1;
-    }
-
-    app.game.waiting_for_continue = false;
-
-    let cards_left = app.game.cards_remaining;
-
-    dbglog!("Finalize: cleared trick, cards_remaining={}", cards_left);
-
-    if cards_left == 0 {
-        let n = app.config.num_players as usize;
-
-        let deltas = score_hand(
-            app.config.score_mode,
-            false, // hard_score removed from options, keep as false for compatibility
-            &app.game.calls,
-            &app.game.tricks,
-            app.game.dealt_cards,
-        );
-
-        for (i, &delta) in deltas.iter().enumerate().take(n) {
-            app.game.scores[i] = app.game.scores[i].saturating_add(delta);
-        }
-
-        let max = app.config.max_cards;
-        let total_rounds = (max * 2).saturating_sub(1);
-
-        let final_round = app.game.round_no >= total_rounds;
-
-        let best_score = *app.game.scores.iter().max().unwrap_or(&0);
-
-        let human_best = app.game.scores.first().copied().unwrap_or(0);
-
-        dbglog!(
-            "End hand (finalize): round={} final_round={} scores={:?}",
-            app.game.round_no,
-            final_round,
-            app.game.scores
-        );
-
-        drop(app);
-
-        set_status("");
-
-        if final_round {
-            // Redraw the screen with updated scores BEFORE showing the message box
-            // (matching Pascal code: DrawInformation then MessageBox)
-            // IMPORTANT: Keep in_progress=true so WM_PAINT draws the game state
-            request_redraw(hwnd);
-            unsafe {
-                // Force immediate redraw by sending WM_PAINT directly
-                SendMessageW(hwnd, WM_PAINT, WPARAM(0), LPARAM(0));
-            }
-
-            // Show end-of-game message (like original Pascal code)
-            let message = if human_best >= best_score {
-                wide("Well done! - You've won!")
-            } else {
-                // Find which player won
-                let app = lock_app_state();
-                let winner = app
-                    .game
-                    .scores
-                    .iter()
-                    .enumerate()
-                    .max_by_key(|(_, &score)| score)
-                    .map(|(idx, _)| idx + 1)
-                    .unwrap_or(1);
-                drop(app);
-                wide(&format!("Game won by player {}", winner))
-            };
-
-            unsafe {
-                MessageBoxW(
-                    hwnd,
-                    PCWSTR(message.as_ptr()),
-                    PCWSTR(wide("Estimation Whist").as_ptr()),
-                    MB_ICONINFORMATION | MB_OK,
-                );
-            }
-
-            // NOW mark the game as not in progress (after user sees the final state)
-            lock_app_state().game.in_progress = false;
-
-            if human_best >= best_score {
-                maybe_update_high_scores(hwnd, human_best);
-            }
-
-            // Start random things AFTER high score entry is complete
-            unsafe {
-                start_random_things(hwnd);
-            }
-
-            request_redraw(hwnd);
-
-            true
+        let (bs, hb) = if let StepResult::HandComplete {
+            ref final_scores, ..
+        } = res
+        {
+            let b = *final_scores.iter().max().unwrap_or(&0);
+            let h = final_scores.first().copied().unwrap_or(0);
+            (b, h)
         } else {
-            // Start next round automatically
+            (0, 0)
+        };
+        (res, bs, hb)
+    };
 
-            start_deal(hwnd);
+    match res {
+        StepResult::HandComplete {
+            final_scores: _,
+            game_over,
+        } => {
+            dbglog!("End hand (finalize): game_over={}", game_over);
+            set_status("");
 
-            true
+            if game_over {
+                request_redraw(hwnd);
+                unsafe {
+                    SendMessageW(hwnd, WM_PAINT, WPARAM(0), LPARAM(0));
+                }
+
+                let message = if human_best >= best_score {
+                    wide("Well done! - You've won!")
+                } else {
+                    let app = lock_app_state();
+                    let winner = app
+                        .game
+                        .scores
+                        .iter()
+                        .enumerate()
+                        .max_by_key(|(_, &score)| score)
+                        .map(|(idx, _)| idx + 1)
+                        .unwrap_or(1);
+                    drop(app);
+                    wide(&format!("Game won by player {}", winner))
+                };
+
+                unsafe {
+                    MessageBoxW(
+                        hwnd,
+                        PCWSTR(message.as_ptr()),
+                        PCWSTR(wide("Estimation Whist").as_ptr()),
+                        MB_ICONINFORMATION | MB_OK,
+                    );
+                }
+
+                lock_app_state().game.in_progress = false;
+
+                if human_best >= best_score {
+                    maybe_update_high_scores(hwnd, human_best);
+                }
+
+                unsafe {
+                    start_random_things(hwnd);
+                }
+                request_redraw(hwnd);
+                true
+            } else {
+                start_deal(hwnd);
+                true
+            }
         }
-    } else {
-        // Prepare next trick
-
-        // Set start_player to last winner for the next trick (legacy parity)
-
-        if let Some(w) = app.game.last_winner {
-            app.game.start_player = w;
+        _ => {
+            // Trick cleared
+            unsafe {
+                update_cheat_cards_window();
+            }
+            set_status("");
+            request_redraw(hwnd);
+            false
         }
-
-        if let Some(nextp) = next_player_to_act(app.game.start_player, &app.game.trick) {
-            app.game.current_player = nextp;
-
-            app.game.waiting_for_human = nextp == 0;
-
-            dbglog!(
-                "Finalize: next trick start={} cur={} waiting={}",
-                app.game.start_player,
-                app.game.current_player,
-                app.game.waiting_for_human
-            );
-        }
-
-        drop(app);
-
-        // Update cheat cards window after trick cleared
-        unsafe {
-            update_cheat_cards_window();
-        }
-
-        set_status("");
-
-        request_redraw(hwnd);
-
-        false
     }
 }
-
 // Classic hand drawing (absolute 96-DPI coordinates; overlap and invert for illegal)
 
 // Classic trick row drawing: absolute positions and region clear
@@ -1424,121 +1359,43 @@ fn create_default_menu(hwnd: HWND) {
 
 fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
     loop {
-        let mut app = lock_app_state();
-
-        dbglog!(
-            "Loop top: start={} cur={} waiting={} trick={:?}",
-            app.game.start_player,
-            app.game.current_player,
-            app.game.waiting_for_human,
-            app.game.trick
-        );
-
-        let n = app.config.num_players as usize;
-
-        if n == 0 || app.game.trick.len() != n {
-            break;
-        }
-
-        if app.game.waiting_for_human {
-            break;
-        }
-
-        // Determine whose turn it is based on start seat and trick state
-
-        if let Some(cur) = next_player_to_act(app.game.start_player, &app.game.trick) {
-            dbglog!(
-                "AI loop: next seat {} start={} trick={:?}",
-                cur,
-                app.game.start_player,
-                app.game.trick
-            );
-
-            if cur == 0 {
-                app.game.current_player = cur;
-
-                app.game.waiting_for_human = true;
-
-                drop(app);
-
-                break;
-            }
-
-            // AI plays a legal random card at seat cur
-            let hand = app.game.hands[cur].clone();
-            let trick = app.game.trick.clone();
-
-            if hand.is_empty() {
-                app.game.current_player = cur;
-                drop(app);
-                continue;
-            }
-
+        let res = {
+            let mut app_guard = lock_app_state();
+            let app = &mut *app_guard;
             let mut rng = rand::thread_rng();
-            let card = select_card_to_play(&hand, &trick, &mut rng);
+            advance_game_step(&mut app.game, &app.config, &mut rng)
+        };
 
-            // Remove card from hand and add to trick
-            let real = &mut app.game.hands[cur];
-            if let Some(pos) = real.iter().position(|&c| c == card) {
-                real.remove(pos);
+        match res {
+            StepResult::WaitHuman => break,
+            StepResult::AiMoved { seat, card } => {
+                dbglog!("AI seat {} played card {}", seat, card);
+                unsafe {
+                    update_cheat_cards_window();
+                }
+                // Loop continues
             }
-            app.game.trick[cur] = Some(card);
-
-            dbglog!("AI seat {} played card {}", cur, card);
-
-            // Update current player to next to act
-
-            if let Some(nextp) = next_player_to_act(app.game.start_player, &app.game.trick) {
-                app.game.current_player = nextp;
-            }
-
-            drop(app);
-
-            // Update cheat cards window after AI plays
-            unsafe {
-                update_cheat_cards_window();
-            }
-        } else {
-            // Trick full
-
-            dbglog!("AI loop: trick full");
-
-            drop(app);
-        }
-
-        // Check if trick complete
-
-        {
-            let app2 = lock_app_state();
-
-            if app2.game.trick.iter().filter(|c| c.is_some()).count()
-                == (app2.config.num_players as usize)
-            {
-                drop(app2);
-
-                dbglog!("Trick complete -> deciding winner");
-
-                decide_winner_and_setup();
-
-                // Pause per option: Dialog shows MB, Mouse waits for click
-
-                let (notify, winner) = {
+            StepResult::TrickComplete {
+                winner,
+                winner_1based: _,
+            } => {
+                // Show message or wait
+                let (notify, winner_disp) = {
                     let a = lock_app_state();
                     (a.config.next_notify, a.game.last_winner.unwrap_or(0))
                 };
 
+                dbglog!("Trick complete. Winner={}", winner);
+
                 match notify {
                     NextNotify::Dialog => unsafe {
-                        let msg = if winner > 0 {
-                            format!("Player {} won that trick.", winner)
+                        let msg = if winner_disp > 0 {
+                            format!("Player {} won that trick.", winner_disp)
                         } else {
                             "Trick complete.".to_string()
                         };
-
                         let w = wide(&msg);
-
                         let cap = wide("Estimation Whist");
-
                         let _ = MessageBoxW(
                             hwnd,
                             PCWSTR(w.as_ptr()),
@@ -1546,34 +1403,33 @@ fn advance_ai_until_human_or_trick_end(hwnd: HWND) {
                             MB_ICONINFORMATION,
                         );
 
-                        // Now finalize and continue immediately
-
                         if finalize_trick_and_setup_next(hwnd) {
                             return;
                         }
-
                         continue;
                     },
-
                     NextNotify::Mouse => {
                         let mut a = lock_app_state();
-
                         a.game.waiting_for_continue = true;
-
                         drop(a);
-
                         set_status("Click to continue");
-
                         break;
                     }
                 }
             }
+            StepResult::NoOp => {
+                // If loop doesn't progress, break to avoid hang
+                break;
+            }
+            StepResult::HandComplete { .. } => {
+                // Should not happen in this loop usually, unless finalize called implicitly?
+                // finalize is separate.
+                break;
+            }
         }
     }
-
     request_redraw(hwnd);
 }
-
 fn decide_winner_and_setup() {
     let mut app = lock_app_state();
 
